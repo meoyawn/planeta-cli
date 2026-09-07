@@ -1,4 +1,4 @@
-module github.com/meoyawn/planeta
+module github.com/meoyawn/planeta-cli
 
 go 1.25.0
 

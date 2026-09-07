@@ -5,7 +5,7 @@ An HTTP-only Go CLI for the public [Planeta Zdorovo catalog](https://planetazdor
 ## Install and import browser clearance
 
 ```sh
-go install github.com/meoyawn/planeta@latest
+go install github.com/meoyawn/planeta-cli/cmd/planeta@latest
 planeta auth import --browser chrome
 planeta search магний хелат
 ```
@@ -140,7 +140,7 @@ Offline tests cover recorded public HTML, request counts, redirects/retries, reg
 
 Fixtures contain sanitized public catalog markup and synthetic authentication values. Cookies, account data, browser profiles, and personal recommendations are not included. Catalog prices, counts, availability, and labels can change.
 
-To build from a local checkout, run `go install .`.
+To install from a local checkout, run `go install ./cmd/planeta`. The command lives in `cmd/planeta`, so the installed executable is always named `planeta`, independent of the repository name. To build without installing, run `go build -o planeta ./cmd/planeta`.
 
 ## License
 
