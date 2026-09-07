@@ -1,0 +1,8 @@
+/planeta
+/.planeta-cookies
+*.cookies
+auth.json
+.env
+.env.*
+!.env.example
+/search-result.json
