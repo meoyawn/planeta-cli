@@ -10,13 +10,14 @@ planeta auth import --browser chrome
 planeta search магний хелат
 ```
 
-Open the site in your signed-out browser and let its normal browser check finish before importing. No pharmacy account is required.
+Use your existing browser window. You do not need to sign out or create a pharmacy account. If cookies need refreshing, the CLI asks you to reload the site and leave the tab open until the catalog appears.
 
 Import uses [Sweet Cookie v0.0.2](https://github.com/steipete/sweetcookie), following the browser-import approach in [spogo](https://github.com/openclaw/spogo). It reads the selected browser's local cookie store; it does not launch or automate a browser. macOS may show a Keychain prompt.
 
 ```sh
 planeta auth import --browser firefox
 planeta auth import --browser chrome --browser-profile "Profile 1"
+planeta auth import --browser chrome --wait 2m
 planeta auth status
 ```
 
@@ -26,7 +27,13 @@ Only `qrator_jsid`, `qrator_jsid2`, `city_id`, `city_code`, and `region_id` for 
 
 The CLI manages `auth.json` automatically under `os.UserConfigDir()/planeta/`: on macOS, `~/Library/Application Support/planeta/auth.json`; on Linux, normally `~/.config/planeta/auth.json`. The file has owner-only permissions. There is no manual cookie-file maintenance.
 
-Qrator clearance still expires and may depend on your network and browser. Import copies an existing clearance; it cannot renew an expired browser challenge. When requested, refresh the site in that browser and repeat `auth import`.
+**A working browser tab does not always mean its cookies are saved to disk yet.** Chrome can be using fresh cookies while the importer still sees the expired copy. In a terminal, `auth import` waits up to 90 seconds, checking the cookie file every two seconds. It explains which profile/file it read, when the last saved clearance expired, and what to do. Refresh the site yourself; the CLI imports the fresh cookies and continues as soon as the browser saves them. Ctrl-C cancels. Use `--wait 2m` for a longer wait, or `--wait 0` to check once. Without an interactive terminal, waiting defaults to zero, so scripts do not hang unexpectedly.
+
+For Chrome profile selection, open `chrome://version` in the working window and copy **Profile Path** into `--browser-profile`. A friendly name such as “Your Chrome” can differ from the profile directory, such as `Default`. New imports remember the actual cookie-store path for future refreshes. Private-window cookies cannot be imported from disk.
+
+Search and ID commands reuse valid saved clearance. When it expires, they first try importing fresh cookies from the remembered browser profile. If the site rejects clearance earlier, they refresh cookies and retry only the challenged request, once. If the browser still has the rejected cookie, the CLI asks you to reload and waits for a changed cookie before retrying. `--auth-wait` controls this wait (90 seconds in a terminal, zero otherwise), within the overall `--timeout`.
+
+The CLI also saves anonymous cookie renewals returned by successful HTTP requests, including the [expiry extensions supplied by Qrator](https://docs.qrator.net/technologies/tracking-cookie.html). Clearance can still expire after inactivity or a network change; the same human refresh flow handles that. The CLI never launches, controls, or embeds a browser.
 
 ## Search
 
@@ -104,7 +111,7 @@ planeta id --url "https://planetazdorovo.ru/kazan/catalog/...-15484411/" 1548441
 
 Replace the abbreviated example with the real product URL. Unknown IDs fail locally with guidance to search first. If a product URL changes, repeat search.
 
-## Fixed HTTP request count
+## Bounded HTTP request count
 
 | Command | Successful requests | What is fetched |
 | --- | ---: | --- |
@@ -112,7 +119,7 @@ Replace the abbreviated example with the real product URL. Unknown IDs fail loca
 | `id`, with or without `--full` | 2 | City page + one product page |
 | `auth import`, `auth status`, help | 0 | Local state only |
 
-Failures stop early and make **at most two** requests. The client enforces this budget. It disables retries and redirects, including transport reuse that can trigger implicit retries. No command fetches additional products, pages, images, PDFs, or pharmacy-location AJAX data. Pharmacy availability and “from” prices come from the page; individual pharmacy prices are not fetched.
+Normal commands make **at most two** requests. A site-verification challenge permits one additional request after cookie refresh, for a maximum of **three**. `http_requests` includes that retry. Authentication reads and waits remain entirely local and make zero HTTP requests. Other failures stop immediately; redirects and transport retries are disabled. No command fetches additional products, pages, images, PDFs, or pharmacy-location AJAX data. Pharmacy availability and “from” prices come from the page; individual pharmacy prices are not fetched.
 
 Put any iteration outside the CLI. For example, in fish:
 
@@ -123,11 +130,11 @@ for id in (jq -r '.results[].id' search.json)
 end
 ```
 
-The 15-result example costs 2 search requests plus 15 × 2 product requests. Add `--full` to each product invocation when you need the medical instructions.
+With valid clearance, the 15-result example costs 2 search requests plus 15 × 2 product requests. Add `--full` to each product invocation when you need the medical instructions.
 
 Flags can appear before or after positional arguments. A literal `--` ends option parsing. `--timeout` defaults to 90 seconds for the entire command. `--user-agent` can match the importing browser if necessary. Success emits one JSON object to stdout; errors go to stderr and exit nonzero.
 
-For compatibility, `--cookie-file` / `PLANETA_COOKIE_FILE` can still override imported cookies with a legacy Cookie-header file. If no managed auth store exists, `~/.config/planeta/cookies` and then `.planeta-cookies` are fallback sources. Managed imports take precedence over those legacy defaults.
+For compatibility, `--cookie-file` / `PLANETA_COOKIE_FILE` can still override imported cookies with a legacy Cookie-header file. Explicit overrides disable automatic browser imports. If no managed auth store exists, `~/.config/planeta/cookies` and then `.planeta-cookies` are fallback sources. Managed imports take precedence over those legacy defaults.
 
 ## Verification
 
@@ -139,7 +146,7 @@ task check
 
 This runs race tests (`task test`) and the pinned golangci-lint tool (`task lint`), including `go vet`. Tool dependencies live in `tools.mod` and `tools.sum`, separate from the CLI's dependencies. GitHub Actions runs the same check for pull requests and pushes to `main`.
 
-Offline tests cover recorded public HTML, request counts, redirects/retries, region selection, pagination, empty searches, negative batch IDs, pharmacy-count extraction (including unknown versus zero and conflicting counts), ingredient and table parsing, default versus full output, browser-import filtering, secret-free auth output, private file permissions, and persistent URL lookup.
+Offline tests cover recorded public HTML, request counts, bounded challenge recovery, region selection during refresh, pagination, empty searches, negative batch IDs, pharmacy-count extraction (including unknown versus zero and conflicting counts), ingredient and table parsing, default versus full output, delayed browser cookie saves, expiry/profile diagnostics, cancellation, noninteractive behavior, cookie renewals, browser-import filtering, secret-free auth output, private file permissions, and persistent URL lookup.
 
 Fixtures contain sanitized public catalog markup and synthetic authentication values. Cookies, account data, browser profiles, and personal recommendations are not included. Catalog prices, counts, availability, and labels can change.
 
