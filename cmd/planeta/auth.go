@@ -44,15 +44,17 @@ type storedCookie struct {
 }
 
 type authStore struct {
-	Browser    string         `json:"browser"`
-	Profile    string         `json:"browser_profile,omitempty"`
-	ImportedAt time.Time      `json:"imported_at"`
-	Cookies    []storedCookie `json:"cookies"`
+	Browser     string         `json:"browser"`
+	Profile     string         `json:"browser_profile,omitempty"`
+	ProfilePath string         `json:"browser_profile_path,omitempty"`
+	ImportedAt  time.Time      `json:"imported_at"`
+	Cookies     []storedCookie `json:"cookies"`
 }
 
 type authResult struct {
 	Browser            string     `json:"browser"`
 	Profile            string     `json:"browser_profile,omitempty"`
+	ProfilePath        string     `json:"browser_profile_path,omitempty"`
 	ImportedAt         time.Time  `json:"imported_at"`
 	CookieNames        []string   `json:"cookie_names"`
 	CookieCount        int        `json:"cookie_count"`
@@ -65,8 +67,19 @@ type authResult struct {
 type cookieReader func(context.Context, sweetcookie.Options) (sweetcookie.Result, error)
 
 func importBrowserCookies(ctx context.Context, browser Browser, profile, path string, read cookieReader) (*authResult, error) {
+	store, warnings, err := readBrowserAuth(ctx, browser, profile, read)
+	if err != nil {
+		return nil, err
+	}
+	return saveBrowserAuth(path, store, warnings)
+}
+
+func readBrowserAuth(ctx context.Context, browser Browser, profile string, read cookieReader) (*authStore, []string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	if browser.value == "" {
-		return nil, fmt.Errorf("browser is required; use --browser chrome (or your browser)")
+		return nil, nil, fmt.Errorf("browser is required; use --browser chrome (or your browser)")
 	}
 	opts := sweetcookie.Options{
 		URL:      siteOrigin + "/",
@@ -74,28 +87,41 @@ func importBrowserCookies(ctx context.Context, browser Browser, profile, path st
 		Browsers: []sweetcookie.Browser{browser.value},
 		Mode:     sweetcookie.ModeFirst, Timeout: 30 * time.Second,
 	}
+	if deadline, ok := ctx.Deadline(); ok {
+		opts.Timeout = min(opts.Timeout, time.Until(deadline))
+		if opts.Timeout <= 0 {
+			return nil, nil, context.DeadlineExceeded
+		}
+	}
 	if profile != "" {
 		opts.Profiles = map[sweetcookie.Browser]string{browser.value: profile}
 	}
 	result, err := read(ctx, opts)
 	if err != nil {
-		return nil, fmt.Errorf("read %s cookies: %w", browser.value, err)
+		return nil, nil, fmt.Errorf("read %s cookies: %w", browser.value, err)
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	store := authStore{Browser: string(browser.value), Profile: profile, ImportedAt: time.Now().UTC()}
+	store := &authStore{Browser: string(browser.value), Profile: profile, ImportedAt: time.Now().UTC()}
+	// Keep a real store path for future imports. Chromium's friendly profile name
+	// (e.g. "Your Chrome") is not its on-disk directory (e.g. "Default").
+	for _, cookie := range result.Cookies {
+		if validBrowserCookie(cookie, store.ImportedAt) && isClearanceCookie(cookie.Name) {
+			store.ProfilePath = cookie.Source.StorePath
+			if cookie.Source.Profile != "" {
+				store.Profile = cookie.Source.Profile
+			}
+			break
+		}
+	}
 	hasClearance := false
 	for _, cookie := range result.Cookies {
-		domain := strings.ToLower(strings.TrimPrefix(cookie.Domain, "."))
-		if domain != "planetazdorovo.ru" || !isAnonymousCookie(cookie.Name) || cookie.Value == "" || (cookie.Path != "" && cookie.Path != "/") {
+		if !validBrowserCookie(cookie, store.ImportedAt) {
 			continue
 		}
-		if cookie.Expires != nil && !cookie.Expires.After(store.ImportedAt) {
-			continue
-		}
-		check := &http.Cookie{Name: cookie.Name, Value: cookie.Value, Domain: cookie.Domain, Path: "/"} // #nosec G124 -- Validate imported cookie syntax; this does not issue a server cookie.
-		if check.Valid() != nil {
+		// Never combine clearance from different browser profiles.
+		if store.ProfilePath != "" && cookie.Source.StorePath != store.ProfilePath {
 			continue
 		}
 		expires := cookie.Expires
@@ -108,7 +134,7 @@ func importBrowserCookies(ctx context.Context, browser Browser, profile, path st
 			Name: cookie.Name, Value: cookie.Value, Domain: cookie.Domain, Path: "/",
 			Expires: expires, Secure: cookie.Secure, HTTPOnly: cookie.HTTPOnly,
 		})
-		if cookie.Name == "qrator_jsid" || cookie.Name == "qrator_jsid2" {
+		if isClearanceCookie(cookie.Name) {
 			hasClearance = true
 		}
 		if store.Profile == "" {
@@ -116,25 +142,45 @@ func importBrowserCookies(ctx context.Context, browser Browser, profile, path st
 		}
 	}
 	if !hasClearance {
-		detail := ""
-		if len(result.Warnings) > 0 {
-			detail = "; " + strings.Join(result.Warnings[:min(3, len(result.Warnings))], "; ")
+		// The normal read excludes expired cookies before Sweet Cookie deduplicates
+		// profiles. Read expiry metadata only on failure, to explain what happened.
+		opts.IncludeExpired = true
+		diagnostic, diagnosticErr := read(ctx, opts)
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
 		}
-		return nil, fmt.Errorf("no unexpired anonymous Qrator cookies found in %s; open planetazdorovo.ru in that browser while signed out, allow its check to finish, and re-import; use --browser-profile for a different profile%s", browser.value, detail)
+		problem := &browserCookieError{browser: browser, profile: profile, warnings: result.Warnings}
+		if diagnosticErr == nil {
+			problem.inspect(diagnostic.Cookies, store.ImportedAt)
+		}
+		return nil, nil, problem
 	}
+	return store, result.Warnings, nil
+}
+
+func validBrowserCookie(cookie sweetcookie.Cookie, now time.Time) bool {
+	if strings.ToLower(strings.TrimPrefix(cookie.Domain, ".")) != "planetazdorovo.ru" ||
+		!isAnonymousCookie(cookie.Name) || cookie.Value == "" || (cookie.Path != "" && cookie.Path != "/") ||
+		(cookie.Expires != nil && !cookie.Expires.After(now)) {
+		return false
+	}
+	return (&http.Cookie{Name: cookie.Name, Value: cookie.Value, Domain: cookie.Domain, Path: "/"}).Valid() == nil // #nosec G124 -- Validate imported cookie syntax; this does not issue a server cookie.
+}
+
+func saveBrowserAuth(path string, store *authStore, warnings []string) (*authResult, error) {
 	if err := atomicJSON(path, store); err != nil {
 		return nil, fmt.Errorf("save imported cookies: %w", err)
 	}
 	summary := store.summary(path)
-	summary.Warnings = result.Warnings
+	summary.Warnings = warnings
 	return summary, nil
 }
 
 func (s *authStore) summary(path string) *authResult {
-	result := &authResult{Browser: s.Browser, Profile: s.Profile, ImportedAt: s.ImportedAt, Store: path, CookieNames: []string{}}
+	result := &authResult{Browser: s.Browser, Profile: s.Profile, ProfilePath: s.ProfilePath, ImportedAt: s.ImportedAt, Store: path, CookieNames: []string{}}
 	for _, cookie := range s.Cookies {
 		result.CookieNames = append(result.CookieNames, cookie.Name)
-		if (cookie.Name == "qrator_jsid" || cookie.Name == "qrator_jsid2") && cookie.Expires != nil {
+		if isClearanceCookie(cookie.Name) && cookie.Expires != nil {
 			if result.ClearanceExpiresAt == nil || cookie.Expires.Before(*result.ClearanceExpiresAt) {
 				result.ClearanceExpiresAt = cookie.Expires
 			}
