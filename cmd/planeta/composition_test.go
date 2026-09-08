@@ -8,6 +8,7 @@ import (
 )
 
 func TestRecordedPlainIDCompositionLabels(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("testdata/composition-labels.json")
 	if err != nil {
 		t.Fatal(err)
@@ -25,6 +26,7 @@ func TestRecordedPlainIDCompositionLabels(t *testing.T) {
 	}
 	for _, label := range labels {
 		t.Run(label.ID, func(t *testing.T) {
+			t.Parallel()
 			found := false
 			for _, amount := range parseCompositionAmounts(label.Composition, nil) {
 				if !strings.EqualFold(amount.Substance, "Магний") {
@@ -43,6 +45,7 @@ func TestRecordedPlainIDCompositionLabels(t *testing.T) {
 }
 
 func TestCompositionAmountsPreserveDistinctSubstancesAndServing(t *testing.T) {
+	t.Parallel()
 	text := "Содержание активных веществ в 1 капсуле:\nМагния бисглицинат 250 мг, в том числе магний 50 мг;\nВитамин В6 0,75 мг"
 	got := parseCompositionAmounts(text, nil)
 	if len(got) != 3 {
@@ -62,6 +65,7 @@ func TestCompositionAmountsPreserveDistinctSubstancesAndServing(t *testing.T) {
 }
 
 func TestCompositionAmountsWorkForOtherDrugsAndSupplementUnits(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		text, substance, unit, perUnit string
 		amount, perQuantity            float64
@@ -72,6 +76,7 @@ func TestCompositionAmountsWorkForOtherDrugsAndSupplementUnits(t *testing.T) {
 		{"В 1 таблетке:\nВитамин D3 2000 МЕ", "Витамин D3", "ме", "таблетка", 2000, 1},
 	} {
 		t.Run(test.substance, func(t *testing.T) {
+			t.Parallel()
 			got := parseCompositionAmounts(test.text, nil)
 			if len(got) != 1 || got[0].Substance != test.substance || got[0].Amount != test.amount || got[0].Unit != test.unit || got[0].Per == nil || got[0].Per.Quantity != test.perQuantity || got[0].Per.Unit != test.perUnit {
 				t.Fatalf("incorrect declaration: %+v", got)
@@ -81,6 +86,7 @@ func TestCompositionAmountsWorkForOtherDrugsAndSupplementUnits(t *testing.T) {
 }
 
 func TestCompositionAmountsDoNotInventBasisOrConvertCompoundMass(t *testing.T) {
+	t.Parallel()
 	got := parseCompositionAmounts("Магния бисглицинат 250 мг", nil)
 	if len(got) != 1 || got[0].Substance != "Магния бисглицинат" || got[0].Per != nil {
 		t.Fatalf("invented elemental content or serving: %+v", got)
@@ -101,6 +107,7 @@ func TestCompositionAmountsDoNotInventBasisOrConvertCompoundMass(t *testing.T) {
 }
 
 func TestCompositionTableAmountsUseTheirOwnColumnBasis(t *testing.T) {
+	t.Parallel()
 	table := [][]string{{"Вещество", "В 1 капсуле", "В 2 капсулах"}, {"Кальций", "100 мг", "200 мг"}, {"Витамин D3", "10 мкг", "20 мкг"}}
 	got := parseCompositionAmounts("Вещество | В 1 капсуле | В 2 капсулах\nКальций | 100 мг | 200 мг", [][][]string{table})
 	if len(got) != 4 {

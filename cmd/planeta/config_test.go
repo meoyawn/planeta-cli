@@ -17,6 +17,7 @@ func writeTestCookieFile(t *testing.T, path string) {
 }
 
 func TestCookieDiscoveryWorksOutsideProject(t *testing.T) {
+	t.Parallel()
 	configDir := t.TempDir()
 	global := filepath.Join(configDir, "planeta", "cookies")
 	writeTestCookieFile(t, global)
@@ -33,6 +34,7 @@ func TestCookieDiscoveryWorksOutsideProject(t *testing.T) {
 }
 
 func TestCookieFilePrecedence(t *testing.T) {
+	t.Parallel()
 	configDir := t.TempDir()
 	global := filepath.Join(configDir, "planeta", "cookies")
 	local := filepath.Join(t.TempDir(), ".planeta-cookies")
@@ -46,6 +48,7 @@ func TestCookieFilePrecedence(t *testing.T) {
 		{"no user config directory", "", "", local},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := locateCookieFile(test.override, test.config, local)
 			if err != nil || got != test.want {
 				t.Fatalf("got %q, error %v; want %q", got, err, test.want)
@@ -59,6 +62,7 @@ func TestCookieFilePrecedence(t *testing.T) {
 }
 
 func TestMissingCookieFilesStillAllowAnonymousAttempt(t *testing.T) {
+	t.Parallel()
 	got, err := locateCookieFile("", t.TempDir(), filepath.Join(t.TempDir(), ".planeta-cookies"))
 	if err != nil || got != "" {
 		t.Fatalf("got %q, error %v; want no cookie file", got, err)

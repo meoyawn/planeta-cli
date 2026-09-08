@@ -1,7 +1,6 @@
 package main
 
 import (
-	"net/url"
 	"os"
 	"reflect"
 	"strings"
@@ -10,7 +9,7 @@ import (
 
 func fixture(t *testing.T, name string) []byte {
 	t.Helper()
-	body, err := os.ReadFile("testdata/" + name + ".html")
+	body, err := os.ReadFile("testdata/" + name + ".html") // #nosec G304 -- Fixture names are constants supplied by these tests.
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -18,7 +17,8 @@ func fixture(t *testing.T, name string) []byte {
 }
 
 func TestParseRecordedSearchMatchesChrome(t *testing.T) {
-	u, _ := url.Parse("https://planetazdorovo.ru/search/?q=магний+хелат")
+	t.Parallel()
+	u := parseTestURL(t, "https://planetazdorovo.ru/search/?q=магний+хелат")
 	page, err := parseSearchPage(fixture(t, "magnesium-chelate"), u, "kazan")
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +42,8 @@ func TestParseRecordedSearchMatchesChrome(t *testing.T) {
 }
 
 func TestNoMatchesDoesNotReturnRecommendations(t *testing.T) {
-	u, _ := url.Parse("https://planetazdorovo.ru/search/?q=zzzxqv-no-such-product-927461")
+	t.Parallel()
+	u := parseTestURL(t, "https://planetazdorovo.ru/search/?q=zzzxqv-no-such-product-927461")
 	body := fixture(t, "no-matches")
 	if !strings.Contains(string(body), `data-count_element="6"`) {
 		t.Fatal("fixture must include the website's six recommendations")
@@ -57,7 +58,8 @@ func TestNoMatchesDoesNotReturnRecommendations(t *testing.T) {
 }
 
 func TestNoMatchesWithQueryInHeading(t *testing.T) {
-	u, _ := url.Parse("https://planetazdorovo.ru/search/?q=15484411")
+	t.Parallel()
+	u := parseTestURL(t, "https://planetazdorovo.ru/search/?q=15484411")
 	page, err := parseSearchPage([]byte(`<h1>По запросу "<b>15484411</b>" ничего не найдено</h1>`), u, "kazan")
 	if err != nil || page.total != 0 || len(page.products) != 0 {
 		t.Fatalf("zero-match heading rejected: page=%+v error=%v", page, err)
@@ -65,7 +67,8 @@ func TestNoMatchesWithQueryInHeading(t *testing.T) {
 }
 
 func TestDiscountedBatchesWithoutSchemaMetadataAreIncluded(t *testing.T) {
-	u, _ := url.Parse("https://planetazdorovo.ru/search/?q=магний&PAGEN_1=2")
+	t.Parallel()
+	u := parseTestURL(t, "https://planetazdorovo.ru/search/?q=магний&PAGEN_1=2")
 	page, err := parseSearchPage(fixture(t, "discounted-batches"), u, "kazan")
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +97,8 @@ func TestDiscountedBatchesWithoutSchemaMetadataAreIncluded(t *testing.T) {
 }
 
 func TestParserRejectsIncompleteOrChangedMarkup(t *testing.T) {
-	u, _ := url.Parse("https://planetazdorovo.ru/search/?q=test")
+	t.Parallel()
+	u := parseTestURL(t, "https://planetazdorovo.ru/search/?q=test")
 	body := string(fixture(t, "magnesium-chelate"))
 	cases := map[string]string{
 		"missing heading":            "<html><body>Temporarily unavailable</body></html>",
@@ -105,6 +109,7 @@ func TestParserRejectsIncompleteOrChangedMarkup(t *testing.T) {
 	}
 	for name, input := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			if _, err := parseSearchPage([]byte(input), u, "kazan"); err == nil {
 				t.Fatal("expected an error instead of misleading results")
 			}
@@ -113,7 +118,8 @@ func TestParserRejectsIncompleteOrChangedMarkup(t *testing.T) {
 }
 
 func TestCountComesFromHeadingSuffix(t *testing.T) {
-	u, _ := url.Parse("https://planetazdorovo.ru/search/?q=test")
+	t.Parallel()
+	u := parseTestURL(t, "https://planetazdorovo.ru/search/?q=test")
 	body := strings.Replace(string(fixture(t, "magnesium-chelate")), "<b>магний хелат</b>", "<b>найдено 999 товаров</b>", 1)
 	page, err := parseSearchPage([]byte(body), u, "kazan")
 	if err != nil || page.total != 15 {

@@ -94,7 +94,7 @@ func importBrowserCookies(ctx context.Context, browser Browser, profile, path st
 		if cookie.Expires != nil && !cookie.Expires.After(store.ImportedAt) {
 			continue
 		}
-		check := &http.Cookie{Name: cookie.Name, Value: cookie.Value, Domain: cookie.Domain, Path: "/"}
+		check := &http.Cookie{Name: cookie.Name, Value: cookie.Value, Domain: cookie.Domain, Path: "/"} // #nosec G124 -- Validate imported cookie syntax; this does not issue a server cookie.
 		if check.Valid() != nil {
 			continue
 		}
@@ -145,12 +145,16 @@ func (s *authStore) summary(path string) *authResult {
 	return result
 }
 
-func loadAuth(path string) (*authStore, error) {
-	f, err := os.Open(path)
+func loadAuth(path string) (result *authStore, err error) {
+	f, err := os.Open(path) // #nosec G304 -- The auth store path is chosen by the local CLI, not a remote request.
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close auth store %q: %w", path, closeErr))
+		}
+	}()
 	data, err := io.ReadAll(io.LimitReader(f, (64<<10)+1))
 	if err != nil {
 		return nil, fmt.Errorf("read auth store %q: %w", path, err)
@@ -168,7 +172,7 @@ func (s *authStore) httpCookies() []*http.Cookie {
 		if !isAnonymousCookie(stored.Name) || strings.TrimPrefix(strings.ToLower(stored.Domain), ".") != "planetazdorovo.ru" {
 			continue
 		}
-		cookie := &http.Cookie{
+		cookie := &http.Cookie{ // #nosec G124 -- Preserve imported cookie attributes for the outbound client jar.
 			Name: stored.Name, Value: stored.Value, Domain: stored.Domain, Path: "/",
 			Secure: stored.Secure, HttpOnly: stored.HTTPOnly,
 		}
@@ -202,13 +206,13 @@ func loadClientCookies(explicit, authPath, legacyDir string) ([]*http.Cookie, er
 
 // Temp-file + rename prevents readers from seeing partial JSON during concurrent
 // searches/imports. Both auth and the public URL index use owner-only permissions.
-func atomicJSON(path string, value any) error {
+func atomicJSON(path string, value any) (err error) {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode local state: %w", err)
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil { // #nosec G703 -- Local config/cache paths; product city and ID components are validated before use.
 		return fmt.Errorf("create state directory: %w", err)
 	}
 	f, err := os.CreateTemp(dir, ".planeta-*")
@@ -216,15 +220,18 @@ func atomicJSON(path string, value any) error {
 		return fmt.Errorf("create state file: %w", err)
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer func() {
+		if removeErr := os.Remove(tmp); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) { // #nosec G703 -- Remove only the filename returned by os.CreateTemp above.
+			err = errors.Join(err, fmt.Errorf("remove temporary state file: %w", removeErr))
+		}
+	}()
 	if _, err := f.Write(append(data, '\n')); err != nil {
-		f.Close()
-		return fmt.Errorf("write state: %w", err)
+		return fmt.Errorf("write state: %w", errors.Join(err, f.Close()))
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close state file: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := os.Rename(tmp, path); err != nil { // #nosec G703 -- Destination is the local auth store or a validated product cache path.
 		return fmt.Errorf("replace state: %w", err)
 	}
 	return nil

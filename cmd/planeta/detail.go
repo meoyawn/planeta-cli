@@ -77,11 +77,22 @@ func parseDetailPage(body []byte, source *url.URL, city, id string) (*detailResu
 		var value any
 		if json.Unmarshal([]byte(script.Text()), &value) == nil {
 			if schema := findProductSchema(value, id); schema != nil {
-				result.SourceSchema, _ = json.Marshal(schema)
-				result.Name, _ = schema["name"].(string)
-				result.ActiveIngredient, _ = schema["activeIngredient"].(string)
-				result.DosageForm, _ = schema["dosageForm"].(string)
-				result.Prescription, _ = schema["prescriptionStatus"].(string)
+				result.SourceSchema, err = json.Marshal(schema)
+				if err != nil {
+					return nil, fmt.Errorf("encode product schema: %w", err)
+				}
+				if name, ok := schema["name"].(string); ok {
+					result.Name = name
+				}
+				if ingredient, ok := schema["activeIngredient"].(string); ok {
+					result.ActiveIngredient = ingredient
+				}
+				if form, ok := schema["dosageForm"].(string); ok {
+					result.DosageForm = form
+				}
+				if prescription, ok := schema["prescriptionStatus"].(string); ok {
+					result.Prescription = prescription
+				}
 				if images, ok := schema["image"].([]any); ok {
 					for _, image := range images {
 						if raw, ok := image.(string); ok {

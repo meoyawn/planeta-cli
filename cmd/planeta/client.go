@@ -22,7 +22,7 @@ const defaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 const maxPageBytes = 16 << 20
 const requestBudget = 2
 
-var errBrowserCheck = errors.New("Qrator browser check requires fresh anonymous cookies; open planetazdorovo.ru in your signed-out browser, let its check finish, then run planeta auth import --browser chrome (or your browser)")
+var errBrowserCheck = errors.New("browser check by Qrator requires fresh anonymous cookies; open planetazdorovo.ru in your signed-out browser, let its check finish, then run planeta auth import --browser chrome (or your browser)")
 var citySlug = regexp.MustCompile("^[a-z0-9]+(?:-[a-z0-9]+)*$")
 var validID = regexp.MustCompile("^-?[1-9][0-9]*$")
 
@@ -48,7 +48,11 @@ func newClient(origin, userAgent string, cookies []*http.Cookie) (*client, error
 		return nil, fmt.Errorf("create cookie jar: %w", err)
 	}
 	jar.SetCookies(base, cookies)
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, fmt.Errorf("default HTTP transport has type %T; expected *http.Transport", http.DefaultTransport)
+	}
+	transport := defaultTransport.Clone()
 	transport.ResponseHeaderTimeout = 30 * time.Second
 	// Prevent net/http's transparent retry on a failed reused connection.
 	transport.DisableKeepAlives = true
@@ -71,15 +75,19 @@ func isAnonymousCookie(name string) bool {
 }
 
 // Optional legacy header-file support. Normal use is auth import.
-func readCookies(path string) ([]*http.Cookie, error) {
+func readCookies(path string) (result []*http.Cookie, err error) {
 	if path == "" {
 		return nil, nil
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 G703 -- The CLI explicitly accepts a user-selected local cookie file.
 	if err != nil {
 		return nil, fmt.Errorf("open cookie file %q: %w", path, err)
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close cookie file %q: %w", path, closeErr))
+		}
+	}()
 	data, err := io.ReadAll(io.LimitReader(f, (64<<10)+1))
 	if err != nil {
 		return nil, fmt.Errorf("read cookie file %q: %w", path, err)
@@ -219,7 +227,7 @@ func (c *client) cookieValue(name string) string {
 	return ""
 }
 
-func (c *client) get(ctx context.Context, target *url.URL) ([]byte, error) {
+func (c *client) get(ctx context.Context, target *url.URL) (body []byte, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -229,7 +237,7 @@ func (c *client) get(ctx context.Context, target *url.URL) ([]byte, error) {
 	if target.Scheme != c.base.Scheme || target.Host != c.base.Host {
 		return nil, fmt.Errorf("refusing request outside the catalog origin")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil) // #nosec G704 -- Scheme and host match the configured catalog origin above.
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -237,11 +245,15 @@ func (c *client) get(ctx context.Context, target *url.URL) ([]byte, error) {
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 	req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.5")
 	c.requests++
-	resp, err := c.http.Do(req)
+	resp, err := c.http.Do(req) // #nosec G704 -- The origin is validated above and the client rejects redirects.
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close response: %w", closeErr))
+		}
+	}()
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxPageBytes+1))
 	if strings.Contains(strings.ToLower(string(body)), "/__qrator/") {
 		return nil, errBrowserCheck
@@ -266,6 +278,9 @@ func pageNumber(u *url.URL) int {
 	if value == "" {
 		return 1
 	}
-	number, _ := strconv.Atoi(value)
+	number, err := strconv.Atoi(value)
+	if err != nil {
+		return 0
+	}
 	return number
 }

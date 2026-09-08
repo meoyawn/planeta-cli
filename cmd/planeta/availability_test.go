@@ -2,13 +2,13 @@ package main
 
 import (
 	"encoding/json"
-	"net/url"
 	"reflect"
 	"strings"
 	"testing"
 )
 
 func TestPharmacyCountsNormalizeSearchAndDetailLabels(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		search, detail []string
 		stock, order   int
@@ -30,19 +30,21 @@ func TestPharmacyCountsNormalizeSearchAndDetailLabels(t *testing.T) {
 }
 
 func TestPharmacyCountsKeepUnknownDistinctFromZeroAndDoNotAddOverlappingGroups(t *testing.T) {
+	t.Parallel()
 	counts := parsePharmacyCounts([]string{"В наличии", "Под заказ", "Забрать сегодня: более 10 аптек", "2 упаковки"})
 	data, err := json.Marshal(counts)
 	if err != nil || string(data) != `{"in_stock":null,"orderable":null}` {
 		t.Fatalf("unknown counts must remain null: %s %v", data, err)
 	}
 	counts = parsePharmacyCounts([]string{"В наличии в 71 аптеке", "Под заказ в 93 аптеках", "В наличии в 71 аптеке"})
-	data, _ = json.Marshal(counts)
+	data = marshalTestJSON(t, counts)
 	if string(data) != `{"in_stock":71,"orderable":93}` {
 		t.Fatalf("duplicates or overlapping groups were added: %s", data)
 	}
 }
 
 func TestConflictingOrOverflowingPharmacyCountsRemainUnknown(t *testing.T) {
+	t.Parallel()
 	for _, lines := range [][]string{
 		{"В наличии в 1 аптеке", "В наличии в 2 аптеках", "В наличии в 1 аптеке"},
 		{"В наличии в " + strings.Repeat("9", 30) + " аптеках"},
@@ -56,7 +58,8 @@ func TestConflictingOrOverflowingPharmacyCountsRemainUnknown(t *testing.T) {
 }
 
 func TestRecordedSearchHasPharmacyCountsForEveryProduct(t *testing.T) {
-	u, _ := url.Parse(siteOrigin + "/search/?q=магний+хелат")
+	t.Parallel()
+	u := parseTestURL(t, siteOrigin+"/search/?q=магний+хелат")
 	page, err := parseSearchPage(fixture(t, "magnesium-chelate"), u, "kazan")
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +79,8 @@ func TestRecordedSearchHasPharmacyCountsForEveryProduct(t *testing.T) {
 }
 
 func TestRecordedDetailRetainsCountsInDefaultAndFullOutput(t *testing.T) {
-	u, _ := url.Parse(siteOrigin + "/kazan/catalog/test-15484411/")
+	t.Parallel()
+	u := parseTestURL(t, siteOrigin+"/kazan/catalog/test-15484411/")
 	result, err := parseDetailPage(fixture(t, "magnesium-detail"), u, "kazan", "15484411")
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +88,7 @@ func TestRecordedDetailRetainsCountsInDefaultAndFullOutput(t *testing.T) {
 	assertPharmacyCount(t, result.PharmacyCounts.InStock, 71)
 	assertPharmacyCount(t, result.PharmacyCounts.Orderable, 93)
 	result.concise()
-	data, _ := json.Marshal(result)
+	data := marshalTestJSON(t, result)
 	if !strings.Contains(string(data), `"pharmacy_counts":{"in_stock":71,"orderable":93}`) || len(result.Availability) != 2 {
 		t.Fatalf("default detail lost structured counts or source text: %s", data)
 	}

@@ -131,10 +131,13 @@ For compatibility, `--cookie-file` / `PLANETA_COOKIE_FILE` can still override im
 
 ## Verification
 
+With [Task](https://taskfile.dev/) and Go 1.27+ installed, run:
+
 ```sh
-go test -race ./...
-go vet ./...
+task check
 ```
+
+This runs race tests (`task test`) and the pinned golangci-lint tool (`task lint`), including `go vet`. Tool dependencies live in `tools.mod` and `tools.sum`, separate from the CLI's dependencies. GitHub Actions runs the same check for pull requests and pushes to `main`.
 
 Offline tests cover recorded public HTML, request counts, redirects/retries, region selection, pagination, empty searches, negative batch IDs, pharmacy-count extraction (including unknown versus zero and conflicting counts), ingredient and table parsing, default versus full output, browser-import filtering, secret-free auth output, private file permissions, and persistent URL lookup.
 
