@@ -1,0 +1,16 @@
+version: '3'
+
+tasks:
+  test:
+    desc: Run all tests with the race detector
+    run: once
+    cmd: go test -race -timeout=5m ./...
+
+  lint:
+    desc: Run the pinned golangci-lint Go tool
+    run: once
+    cmd: go tool -modfile=tools.mod golangci-lint run ./...
+
+  check:
+    desc: Run race tests and lint
+    deps: [test, lint]

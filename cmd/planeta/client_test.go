@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,22 +35,25 @@ func testClient(t *testing.T, handler http.HandlerFunc) *client {
 	return c
 }
 
-func selectMockCity(w http.ResponseWriter, r *http.Request) bool {
+func selectMockCity(t *testing.T, w http.ResponseWriter, r *http.Request) bool {
+	t.Helper()
 	if r.URL.Path == "/kazan/" {
-		http.SetCookie(w, &http.Cookie{Name: "city_code", Value: "kazan", Path: "/"})
-		fmt.Fprint(w, "<h1>Казань</h1>")
+		http.SetCookie(w, &http.Cookie{Name: "city_code", Value: "kazan", Path: "/"}) // #nosec G124 -- Synthetic city cookie served over plain HTTP by httptest.
+		writeTestResponse(t, w, "<h1>Казань</h1>")
 		return true
 	}
 	return false
 }
 
 func TestSearchFetchesOnlyRequestedPageWithTwoRequests(t *testing.T) {
+	t.Parallel()
 	for _, number := range []int{1, 2, 3} {
 		t.Run(fmt.Sprint(number), func(t *testing.T) {
+			t.Parallel()
 			var requests atomic.Int32
 			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 				requests.Add(1)
-				if selectMockCity(w, r) {
+				if selectMockCity(t, w, r) {
 					return
 				}
 				if r.URL.Query().Get("q") != "магний & B6" || pageNumber(r.URL) != number {
@@ -62,9 +64,9 @@ func TestSearchFetchesOnlyRequestedPageWithTwoRequests(t *testing.T) {
 					t.Error("anonymous city cookie missing")
 				}
 				links := `<a href="?PAGEN_1=3&amp;q=магний+%26+B6">3</a><a href="?PAGEN_1=2&amp;q=магний+%26+B6">2</a><a href="?q=магний+%26+B6">1</a>`
-				fmt.Fprint(w, mockPage(3, 100+number, links))
+				writeTestResponse(t, w, mockPage(3, 100+number, links))
 			})
-			result, err := c.Search(context.Background(), "магний & B6", "kazan", number)
+			result, err := c.Search(t.Context(), "магний & B6", "kazan", number)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -83,7 +85,7 @@ func TestSearchFetchesOnlyRequestedPageWithTwoRequests(t *testing.T) {
 				t.Fatal("missing next page")
 			}
 			// Even an accidental later call cannot spend another request.
-			if _, err := c.get(context.Background(), c.base); err == nil || requests.Load() != 2 {
+			if _, err := c.get(t.Context(), c.base); err == nil || requests.Load() != 2 {
 				t.Fatal("request budget not enforced")
 			}
 		})
@@ -91,25 +93,27 @@ func TestSearchFetchesOnlyRequestedPageWithTwoRequests(t *testing.T) {
 }
 
 func TestDetailAndFullUseTwoRequestsAndDoNotFetchAssets(t *testing.T) {
+	t.Parallel()
 	for _, full := range []bool{false, true} {
 		t.Run(fmt.Sprint(full), func(t *testing.T) {
+			t.Parallel()
 			var requests atomic.Int32
 			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 				requests.Add(1)
-				if selectMockCity(w, r) {
+				if selectMockCity(t, w, r) {
 					return
 				}
 				if r.URL.Path != "/kazan/catalog/test-15484411/" {
 					t.Errorf("unexpected asset/follow-up request: %s", r.URL)
 				}
-				fmt.Fprint(w, `<div data-id="15484411"><div class="product-detail">
+				writeTestResponse(t, w, `<div data-id="15484411"><div class="product-detail">
 <div class="product-detail__wrap"><h1>Магний</h1><div class="product-detail__price">200 ₽</div>
 <img class="product-detail__img" src="/never-fetch.jpg"></div>
 <div class="product-detail__availability"><p>В наличии в 1 аптеке</p><p>Под заказ в 3 аптеках</p></div></div></div>
 <div class="product-detail-description-content__item" id="instruction_COMPOSITION"><h3>Состав</h3><div class="product-detail-description-content__item-content">Магний 100 мг</div></div>
 <div class="product-detail-description-content__item" id="instruction_USEMETHODANDDOSES"><h3>Способ применения и дозы</h3><div class="product-detail-description-content__item-content">С едой. <a href="/never-fetch.pdf">Инструкция</a></div></div>`)
 			})
-			result, err := c.Detail(context.Background(), "15484411", "kazan", c.base.String()+"/kazan/catalog/test-15484411/")
+			result, err := c.Detail(t.Context(), "15484411", "kazan", c.base.String()+"/kazan/catalog/test-15484411/")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -132,18 +136,20 @@ func TestDetailAndFullUseTwoRequestsAndDoNotFetchAssets(t *testing.T) {
 }
 
 func TestFailuresDoNotRetryOrFollowRedirects(t *testing.T) {
+	t.Parallel()
 	for _, status := range []int{401, 302, 503} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			t.Parallel()
 			var requests atomic.Int32
-			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+			c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
 				requests.Add(1)
 				w.Header().Set("Location", "/never-fetch")
 				w.WriteHeader(status)
 				if status == 401 {
-					fmt.Fprint(w, `<script src="/__qrator/ldr.js"></script>`)
+					writeTestResponse(t, w, `<script src="/__qrator/ldr.js"></script>`)
 				}
 			})
-			_, err := c.Search(context.Background(), "магний хелат", "kazan", 1)
+			_, err := c.Search(t.Context(), "магний хелат", "kazan", 1)
 			if err == nil || requests.Load() != 1 {
 				t.Fatalf("error=%v requests=%d", err, requests.Load())
 			}
@@ -155,16 +161,17 @@ func TestFailuresDoNotRetryOrFollowRedirects(t *testing.T) {
 }
 
 func TestWrongCityAndCancellation(t *testing.T) {
-	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		http.SetCookie(w, &http.Cookie{Name: "city_code", Value: "perm", Path: "/"})
-		fmt.Fprint(w, "<h1>Пермь</h1>")
+	t.Parallel()
+	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "city_code", Value: "perm", Path: "/"}) // #nosec G124 -- Synthetic city cookie served over plain HTTP by httptest.
+		writeTestResponse(t, w, "<h1>Пермь</h1>")
 	})
-	_, err := c.Search(context.Background(), "test", "kazan", 1)
+	_, err := c.Search(t.Context(), "test", "kazan", 1)
 	if err == nil || !strings.Contains(err.Error(), `"perm"`) || c.requests != 1 {
 		t.Fatalf("wrong city accepted: %v", err)
 	}
-	c = testClient(t, func(w http.ResponseWriter, r *http.Request) { t.Error("cancelled search sent a request") })
-	ctx, cancel := context.WithCancel(context.Background())
+	c = testClient(t, func(http.ResponseWriter, *http.Request) { t.Error("cancelled search sent a request") })
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := c.Search(ctx, "test", "kazan", 1); !errors.Is(err, context.Canceled) || c.requests != 0 {
 		t.Fatalf("cancellation not propagated: %v", err)
@@ -172,30 +179,32 @@ func TestWrongCityAndCancellation(t *testing.T) {
 }
 
 func TestInvalidURLsAndInputMakeNoRequests(t *testing.T) {
-	c := testClient(t, func(w http.ResponseWriter, r *http.Request) { t.Error("invalid input sent HTTP") })
+	t.Parallel()
+	c := testClient(t, func(http.ResponseWriter, *http.Request) { t.Error("invalid input sent HTTP") })
 	for _, raw := range []string{
 		"https://other.example/kazan/catalog/test-1/",
 		c.base.String() + "/moskva/catalog/test-1/",
 		c.base.String() + "/kazan/catalog/test-2/",
 		c.base.String() + "/kazan/catalog/test-1/?q=extra",
 	} {
-		if _, err := c.Detail(context.Background(), "1", "kazan", raw); err == nil {
+		if _, err := c.Detail(t.Context(), "1", "kazan", raw); err == nil {
 			t.Errorf("accepted URL %q", raw)
 		}
 	}
-	if _, err := c.Search(context.Background(), "test", "kazan", 0); err == nil {
+	if _, err := c.Search(t.Context(), "test", "kazan", 0); err == nil {
 		t.Fatal("accepted page 0")
 	}
-	if _, err := c.Search(context.Background(), "", "kazan", 1); err == nil {
+	if _, err := c.Search(t.Context(), "", "kazan", 1); err == nil {
 		t.Fatal("accepted empty query")
 	}
-	base, _ := url.Parse(siteOrigin)
+	base := parseTestURL(t, siteOrigin)
 	if _, err := validateProductURL(siteOrigin+"/kazan/catalog/test--157028/", base, "kazan", "-157028"); err != nil {
 		t.Fatalf("negative batch id rejected: %v", err)
 	}
 }
 
 func TestCookieFileDoesNotImportAccountCredentials(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cookies")
 	if err := os.WriteFile(path, []byte("Cookie: qrator_jsid2=clearance; city_code=kazan; PHPSESSID=private; BITRIX_SM_LOGIN=private\n"), 0600); err != nil {
 		t.Fatal(err)

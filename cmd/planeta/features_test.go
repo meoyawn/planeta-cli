@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,13 +16,14 @@ import (
 )
 
 func TestBrowserImportScopeFilteringAndSecretFreeJSON(t *testing.T) {
+	t.Parallel()
 	browser, err := NewBrowserFromValue("Chrome")
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "planeta", "auth.json")
 	expires := time.Now().Add(time.Hour)
-	read := func(ctx context.Context, opts sweetcookie.Options) (sweetcookie.Result, error) {
+	read := func(_ context.Context, opts sweetcookie.Options) (sweetcookie.Result, error) {
 		if opts.URL != siteOrigin+"/" || opts.AllowAllHosts || opts.IncludeExpired || len(opts.Origins) != 0 {
 			t.Fatalf("browser import widened its scope: %+v", opts)
 		}
@@ -45,14 +45,14 @@ func TestBrowserImportScopeFilteringAndSecretFreeJSON(t *testing.T) {
 			{Name: "qrator_jsid2", Value: "other-site", Domain: "other.example", Path: "/"},
 		}}, nil
 	}
-	result, err := importBrowserCookies(context.Background(), browser, "Profile 1", path, read)
+	result, err := importBrowserCookies(t.Context(), browser, "Profile 1", path, read)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.CookieCount != 2 || result.HTTPRequests != 0 {
 		t.Fatalf("bad metadata: %+v", result)
 	}
-	data, _ := json.Marshal(result)
+	data := marshalTestJSON(t, result)
 	if bytes.Contains(data, []byte("secret-clearance")) || bytes.Contains(data, []byte("private-account")) {
 		t.Fatal("secret in auth JSON")
 	}
@@ -64,9 +64,9 @@ func TestBrowserImportScopeFilteringAndSecretFreeJSON(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("unsafe store permissions: %v", err)
 	}
-	parent, _ := os.Stat(filepath.Dir(path))
-	if parent.Mode().Perm() != 0700 {
-		t.Fatal("unsafe directory permissions")
+	parent, err := os.Stat(filepath.Dir(path))
+	if err != nil || parent.Mode().Perm() != 0700 {
+		t.Fatalf("unsafe directory permissions: %v", err)
 	}
 	loaded, err := loadClientCookies("", path, t.TempDir())
 	if err != nil || len(loaded) != 2 {
@@ -75,13 +75,17 @@ func TestBrowserImportScopeFilteringAndSecretFreeJSON(t *testing.T) {
 }
 
 func TestFailedImportPreservesPreviousStore(t *testing.T) {
-	browser, _ := NewBrowserFromValue("chrome")
+	t.Parallel()
+	browser, err := NewBrowserFromValue("chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(t.TempDir(), "auth.json")
 	if err := os.WriteFile(path, []byte("previous"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	expires := time.Now().Add(-time.Hour)
-	_, err := importBrowserCookies(context.Background(), browser, "", path, func(context.Context, sweetcookie.Options) (sweetcookie.Result, error) {
+	_, err = importBrowserCookies(t.Context(), browser, "", path, func(context.Context, sweetcookie.Options) (sweetcookie.Result, error) {
 		return sweetcookie.Result{Cookies: []sweetcookie.Cookie{
 			{Name: "qrator_jsid2", Value: "expired", Domain: "planetazdorovo.ru", Path: "/", Expires: &expires},
 			{Name: "city_code", Value: "kazan", Domain: "planetazdorovo.ru", Path: "/"},
@@ -90,7 +94,10 @@ func TestFailedImportPreservesPreviousStore(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "test keychain warning") {
 		t.Fatalf("expected actionable error: %v", err)
 	}
-	data, _ := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- Path points to this test's temporary auth store.
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(data) != "previous" {
 		t.Fatal("failed import destroyed previous cookies")
 	}
@@ -100,6 +107,7 @@ func TestFailedImportPreservesPreviousStore(t *testing.T) {
 }
 
 func TestProductURLIndexPersistsAcrossSearchesAndCities(t *testing.T) {
+	t.Parallel()
 	p := appPaths{index: filepath.Join(t.TempDir(), "products")}
 	for _, test := range []struct{ city, id string }{{"kazan", "1"}, {"kazan", "2"}, {"perm", "1"}, {"kazan", "-157028"}} {
 		item := product{ID: test.id, URL: siteOrigin + "/" + test.city + "/catalog/test-" + test.id + "/"}
@@ -125,7 +133,8 @@ func TestProductURLIndexPersistsAcrossSearchesAndCities(t *testing.T) {
 }
 
 func TestRecordedDetailAndConciseOutput(t *testing.T) {
-	u, _ := url.Parse(siteOrigin + "/kazan/catalog/test-15484411/")
+	t.Parallel()
+	u := parseTestURL(t, siteOrigin+"/kazan/catalog/test-15484411/")
 	result, err := parseDetailPage(fixture(t, "magnesium-detail"), u, "kazan", "15484411")
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +176,8 @@ func TestRecordedDetailAndConciseOutput(t *testing.T) {
 }
 
 func TestDefaultIDPreservesEntireExcipientListAndSorbitolWarning(t *testing.T) {
-	u, _ := url.Parse(siteOrigin + "/kazan/catalog/test-1/")
+	t.Parallel()
+	u := parseTestURL(t, siteOrigin+"/kazan/catalog/test-1/")
 	excipients := "Карбонат кальция, гидроксипропилметилцеллюлоза, твин 80 (эмульгатор), полиэтиленгликоль, тальк; сорбит, мальтодекстрин; целлюлоза микрокристаллическая, кроскарамеллоза; стеарат кальция."
 	note := "Содержит подсластитель сорбит, который при чрезмерном употреблении может оказывать слабительное действие."
 	body := []byte(`<div class="product-detail" data-id="1"><h1>Магний 60 шт</h1></div>
@@ -181,13 +191,14 @@ func TestDefaultIDPreservesEntireExcipientListAndSorbitolWarning(t *testing.T) {
 	if result.Excipients != excipients+"\n"+note {
 		t.Fatalf("excipient list/warning changed: %q", result.Excipients)
 	}
-	data, _ := json.Marshal(result)
+	data := marshalTestJSON(t, result)
 	if bytes.Contains(data, []byte("Take with meals")) || bytes.Contains(data, []byte("Marketing copy")) {
 		t.Fatal("directions or marketing leaked into default facts")
 	}
 }
 
 func TestPackageFactsUseExplicitQuantityAndDoNotMistakeStrengthForSize(t *testing.T) {
+	t.Parallel()
 	price := 504.0
 	for _, test := range []struct {
 		name, quantity, source, unit string
@@ -199,6 +210,7 @@ func TestPackageFactsUseExplicitQuantityAndDoNotMistakeStrengthForSize(t *testin
 		{"Сироп", "150 мл", "specifications", "мл", 150, 3.36},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			result := detailResult{product: product{Name: test.name, PriceFrom: &price, Currency: "RUB"}, PackageQuantity: test.quantity}
 			result.addPackageFacts()
 			if test.count == 0 {
@@ -215,7 +227,8 @@ func TestPackageFactsUseExplicitQuantityAndDoNotMistakeStrengthForSize(t *testin
 }
 
 func TestInstructionTablesRetainCellBoundaries(t *testing.T) {
-	u, _ := url.Parse(siteOrigin + "/kazan/catalog/test-1/")
+	t.Parallel()
+	u := parseTestURL(t, siteOrigin+"/kazan/catalog/test-1/")
 	body := []byte(`<div class="product-detail" data-id="1"><h1>Test</h1></div>
 <div class="product-detail-description-content__item" id="instruction_COMPOSITION"><h3>Состав</h3><div class="product-detail-description-content__item-content">
 <table><tr><th>Вещество</th><th>В 2 капсулах</th></tr><tr><td>Магний</td><td>200 мг</td></tr><tr><td>B6</td><td>2 мг</td></tr></table></div></div>`)
@@ -236,7 +249,8 @@ func TestInstructionTablesRetainCellBoundaries(t *testing.T) {
 }
 
 func TestMissingCompositionIsReportedEvenWithGenericDisclaimer(t *testing.T) {
-	u, _ := url.Parse(siteOrigin + "/kazan/catalog/test-1/")
+	t.Parallel()
+	u := parseTestURL(t, siteOrigin+"/kazan/catalog/test-1/")
 	body := []byte(`<div class="product-detail" data-id="1"><h1>Test</h1></div>
 <div class="product-detail-description-content__item" id="instruction_description"><h3>Информация</h3><div class="product-detail-description-content__item-content">Generic site disclaimer.</div></div>`)
 	result, err := parseDetailPage(body, u, "kazan", "1")
@@ -250,6 +264,7 @@ func TestMissingCompositionIsReportedEvenWithGenericDisclaimer(t *testing.T) {
 }
 
 func TestDosageFallbackPreservesExplicitServingSize(t *testing.T) {
+	t.Parallel()
 	input := "Активное вещество:\nМагния бисглицинат.\nСодержание активных веществ в 1 таблетке:\nМагний 200 мг\nВитамин B6 2 мг\nСодержание активных веществ в 4 таблетках:\nМагний 800 мг\nВспомогательные вещества:\nМКЦ"
 	want := "Содержание активных веществ в 1 таблетке:\nМагний 200 мг\nВитамин B6 2 мг"
 	if got := declaredServingContents(input); got != want {
@@ -261,22 +276,26 @@ func TestDosageFallbackPreservesExplicitServingSize(t *testing.T) {
 }
 
 func TestCLIFlagsAndValidationWithoutBrowserOrNetwork(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{{"--help"}, {"id", "--help"}, {"auth", "import", "--help"}} {
 		var out, stderr bytes.Buffer
-		if err := run(context.Background(), args, &out, &stderr); err != nil {
+		if err := run(t.Context(), args, &out, &stderr); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var out, stderr bytes.Buffer
 	for _, args := range [][]string{{"auth", "import", "--browser", "invalid"}, {"id", "abc"}, {"search", "--timeout", "-1s", "test"}} {
-		if err := run(context.Background(), args, &out, &stderr); err == nil {
+		if err := run(t.Context(), args, &out, &stderr); err == nil {
 			t.Fatalf("accepted invalid arguments: %v", args)
 		}
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	browser, _ := NewBrowserFromValue("chrome")
-	_, err := importBrowserCookies(ctx, browser, "", filepath.Join(t.TempDir(), "auth.json"), func(context.Context, sweetcookie.Options) (sweetcookie.Result, error) {
+	browser, err := NewBrowserFromValue("chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = importBrowserCookies(ctx, browser, "", filepath.Join(t.TempDir(), "auth.json"), func(context.Context, sweetcookie.Options) (sweetcookie.Result, error) {
 		return sweetcookie.Result{}, nil
 	})
 	if !errors.Is(err, context.Canceled) {

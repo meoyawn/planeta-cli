@@ -42,7 +42,10 @@ type productLocation struct {
 }
 
 func (p appPaths) remember(city string, products []product) error {
-	base, _ := url.Parse(siteOrigin)
+	base, err := url.Parse(siteOrigin)
+	if err != nil {
+		return fmt.Errorf("parse catalog origin: %w", err)
+	}
 	for _, item := range products {
 		if _, err := validateProductURL(item.URL, base, city, item.ID); err != nil {
 			return err
@@ -59,7 +62,7 @@ func (p appPaths) lookup(city, id string) (string, error) {
 	if !citySlug.MatchString(city) || !validID.MatchString(id) {
 		return "", fmt.Errorf("invalid city %q or product id %q", city, id)
 	}
-	data, err := os.ReadFile(filepath.Join(p.index, city, id+".json"))
+	data, err := os.ReadFile(filepath.Join(p.index, city, id+".json")) // #nosec G304 G703 -- City and ID are validated above; p.index is the local CLI cache directory.
 	if errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("no URL saved for product %s in %s; run planeta search first, or use planeta id --url <canonical-product-url> %s", id, city, id)
 	}
@@ -70,7 +73,10 @@ func (p appPaths) lookup(city, id string) (string, error) {
 	if json.Unmarshal(data, &item) != nil || item.ID != id || item.City != city {
 		return "", fmt.Errorf("invalid saved URL for product %s; repeat planeta search to refresh it", id)
 	}
-	base, _ := url.Parse(siteOrigin)
+	base, err := url.Parse(siteOrigin)
+	if err != nil {
+		return "", fmt.Errorf("parse catalog origin: %w", err)
+	}
 	if _, err := validateProductURL(item.URL, base, city, id); err != nil {
 		return "", err
 	}

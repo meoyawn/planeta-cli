@@ -28,8 +28,9 @@ Auth and help: 0 HTTP requests. No redirects, retries, or automatic pagination.
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
+	err := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "planeta:", err)
 		os.Exit(1)
 	}
