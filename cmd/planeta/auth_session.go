@@ -1,16 +1,13 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/mattn/go-isatty"
 	"github.com/steipete/sweetcookie"
 )
 
@@ -18,14 +15,12 @@ func isClearanceCookie(name string) bool {
 	return name == "qrator_jsid" || name == "qrator_jsid2"
 }
 
-// Browser cookies are read from disk only. A working browser tab can have newer
-// cookies in memory, so let the user refresh it while we wait for a saved copy.
+// Browser cookies are read from disk only. Failed imports report how to refresh them.
 type browserCookieError struct {
 	browser   Browser
 	profile   string
 	storePath string
 	expiredAt *time.Time
-	unchanged bool
 	warnings  []string
 }
 
@@ -60,9 +55,7 @@ func (e *browserCookieError) reason() string {
 		fmt.Fprintf(&message, " (profile %q)", e.profile)
 	}
 	message.WriteString(".\n")
-	if e.unchanged {
-		message.WriteString("The site rejected the saved cookie; a refreshed cookie has not reached the browser's cookie file yet.\n")
-	} else if e.expiredAt != nil {
+	if e.expiredAt != nil {
 		fmt.Fprintf(&message, "The last saved clearance expired at %s.\n", e.expiredAt.Local().Format(time.RFC1123))
 	}
 	if e.storePath != "" {
@@ -74,126 +67,21 @@ func (e *browserCookieError) reason() string {
 	return message.String()
 }
 
-func (e *browserCookieError) help() string {
-	message := fmt.Sprintf("Please reload %s/ in your existing, regular %s window.\nWait until the catalog appears and leave the tab open. No need to sign out.\nThe browser may need a few seconds to save its refreshed cookies to disk.\n", siteOrigin, e.browser.value)
-	if e.browser.value == sweetcookie.BrowserChrome || e.browser.value == sweetcookie.BrowserChromium {
-		message += "If you use another profile, copy Profile Path from chrome://version and pass it to --browser-profile.\n"
-	} else {
-		message += "If you use another profile, select it with --browser-profile. Private-window cookies cannot be imported from disk.\n"
-	}
-	return message
-}
-
 func (e *browserCookieError) Error() string {
-	return e.reason() + "\n" + e.help() + fmt.Sprintf("Then run: planeta auth import --browser %s --wait 2m", e.browser.value)
-}
-
-type authImporter struct {
-	browser  Browser
-	profile  string
-	path     string
-	read     cookieReader
-	wait     time.Duration
-	interval time.Duration
-	output   io.Writer
-}
-
-func (a authImporter) importCookies(ctx context.Context, rejected []*http.Cookie) (*authStore, []string, error) {
-	if a.wait > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, a.wait)
-		defer cancel()
-	}
-	interval := a.interval
-	if interval <= 0 {
-		interval = 2 * time.Second
-	}
-	output := a.output
-	if output == nil {
-		output = io.Discard
-	}
-	var lastProblem *browserCookieError
-	for {
-		store, warnings, err := readBrowserAuth(ctx, a.browser, a.profile, a.read)
-		if err == nil && sameClearance(store.httpCookies(), rejected) {
-			err = &browserCookieError{browser: a.browser, profile: store.Profile, storePath: store.ProfilePath, unchanged: true}
-		}
-		if err == nil {
-			if _, err := saveBrowserAuth(a.path, store, warnings); err != nil {
-				return nil, nil, err
-			}
-			if lastProblem != nil {
-				if _, err := fmt.Fprintln(output, "Fresh cookies saved. Continuing."); err != nil {
-					return nil, nil, fmt.Errorf("write cookie import progress: %w", err)
-				}
-			}
-			return store, warnings, nil
-		}
-		var problem *browserCookieError
-		if !errors.As(err, &problem) || a.wait == 0 {
-			return nil, nil, err
-		}
-		if lastProblem == nil {
-			if _, err := fmt.Fprint(output, problem.reason(), "\n", problem.help()); err != nil {
-				return nil, nil, fmt.Errorf("write cookie import guidance: %w", err)
-			}
-			if _, err := fmt.Fprintf(output, "I'll check the saved cookies every %s for up to %s and continue automatically. Ctrl-C cancels.\n", interval, a.wait); err != nil {
-				return nil, nil, fmt.Errorf("write cookie import progress: %w", err)
-			}
-		}
-		lastProblem = problem
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, nil, fmt.Errorf("stopped waiting for %s cookies: %w\n%w", a.browser.value, ctx.Err(), lastProblem)
-		case <-timer.C:
-		}
-	}
-}
-
-func sameClearance(cookies, rejected []*http.Cookie) bool {
-	values := make(map[string]string)
-	for _, cookie := range rejected {
-		if isClearanceCookie(cookie.Name) {
-			values[cookie.Name] = cookie.Value
-		}
-	}
-	if len(values) == 0 {
-		return false
-	}
-	count := 0
-	for _, cookie := range cookies {
-		if isClearanceCookie(cookie.Name) {
-			count++
-			if values[cookie.Name] != cookie.Value {
-				return false
-			}
-		}
-	}
-	return count == len(values)
-}
-
-func defaultAuthWait(stderr io.Writer) time.Duration {
-	file, ok := stderr.(*os.File)
-	if ok && isatty.IsTerminal(file.Fd()) && isatty.IsTerminal(os.Stdin.Fd()) {
-		return 90 * time.Second
-	}
-	return 0
+	return e.reason() + fmt.Sprintf("Reload %s/ in %s, then run: planeta auth import --browser %s", siteOrigin, e.browser.value, e.browser.value)
 }
 
 type authSession struct {
-	importer authImporter
-	store    *authStore
+	path  string
+	store *authStore
 }
 
-func loadAuthSession(ctx context.Context, paths appPaths, explicit string, wait time.Duration, output io.Writer, read cookieReader) (*authSession, []*http.Cookie, error) {
+func loadAuthSession(paths appPaths, explicit string) (*authSession, []*http.Cookie, error) {
 	cookies, err := loadClientCookies(explicit, paths.auth, paths.legacy)
 	if err != nil || explicit != "" {
 		return nil, cookies, err
 	}
-	browser := Browser{value: sweetcookie.BrowserChrome}
-	session := &authSession{importer: authImporter{browser: browser, path: paths.auth, wait: wait, output: output, read: read}}
+	session := &authSession{path: paths.auth}
 	store, err := loadAuth(paths.auth)
 	if errors.Is(err, os.ErrNotExist) {
 		return session, cookies, nil
@@ -202,15 +90,12 @@ func loadAuthSession(ctx context.Context, paths appPaths, explicit string, wait 
 		return nil, nil, err
 	}
 	session.store = store
-	session.importer.browser, err = NewBrowserFromValue(store.Browser)
+	browser, err := NewBrowserFromValue(store.Browser)
 	if err != nil {
 		return nil, nil, err
 	}
-	// Older auth stores contain a display name only. Rediscover those profiles
-	// instead of mistaking "Your Chrome" for an actual profile directory.
-	session.importer.profile = store.ProfilePath
 	if !store.hasClearance(time.Now()) {
-		cookies, err = session.refresh(ctx, nil)
+		return nil, nil, fmt.Errorf("saved Planeta site-verification cookie has expired; run planeta auth import --browser %s", browser.value)
 	}
 	return session, cookies, err
 }
@@ -224,16 +109,6 @@ func (s *authStore) hasClearance(now time.Time) bool {
 	return false
 }
 
-func (s *authSession) refresh(ctx context.Context, rejected []*http.Cookie) ([]*http.Cookie, error) {
-	store, _, err := s.importer.importCookies(ctx, rejected)
-	if err != nil {
-		return nil, err
-	}
-	s.store = store
-	s.importer.profile = store.ProfilePath
-	return store.httpCookies(), nil
-}
-
 // Keep the expiry extensions returned by Qrator instead of discarding them at
 // process exit. Exclude account cookies and skip imports observed after this
 // command started.
@@ -241,7 +116,7 @@ func (s *authSession) saveCookies(cookies []*http.Cookie) error {
 	if s.store == nil || len(cookies) == 0 {
 		return nil
 	}
-	latest, err := loadAuth(s.importer.path)
+	latest, err := loadAuth(s.path)
 	if err != nil {
 		return err
 	}
@@ -278,7 +153,7 @@ func (s *authSession) saveCookies(cookies []*http.Cookie) error {
 		latest.Cookies = append(latest.Cookies, storedCookie{Name: cookie.Name, Value: cookie.Value, Domain: "planetazdorovo.ru", Path: "/", Expires: expires, Secure: cookie.Secure, HTTPOnly: cookie.HttpOnly})
 	}
 	if changed {
-		if err := atomicJSON(s.importer.path, latest); err != nil {
+		if err := atomicJSON(s.path, latest); err != nil {
 			return fmt.Errorf("save renewed site cookies: %w", err)
 		}
 		s.store = latest
