@@ -34,6 +34,7 @@ type instruction struct {
 type detailResult struct {
 	product
 	City               string              `json:"city"`
+	CatalogID          string              `json:"catalog_id,omitempty"`
 	SourceURL          string              `json:"source_url"`
 	FetchedAt          time.Time           `json:"fetched_at"`
 	HTTPRequests       int                 `json:"http_requests"`
@@ -73,10 +74,26 @@ func parseDetailPage(body []byte, source *url.URL, city, id string) (*detailResu
 		City:    city, SourceURL: source.String(),
 		Specifications: []attribute{}, Instructions: []instruction{}, Images: []string{}, Variants: []product{},
 	}
+	pageID := root.Closest("[data-id]").AttrOr("data-id", "")
+	schemaID := id
+	if pageID != "" {
+		schemaID = pageID
+	}
 	for _, script := range doc.Find("script[type='application/ld+json']").EachIter() {
 		var value any
 		if json.Unmarshal([]byte(script.Text()), &value) == nil {
-			if schema := findProductSchema(value, id); schema != nil {
+			if schema := findProductSchema(value, schemaID); schema != nil {
+				// Some canonical URLs retain an old ID while the catalog SKU changes.
+				// Accept that alias only when both the canonical link and the schema
+				// for the visible product identify this exact requested URL.
+				if schemaID != id {
+					schemaURL, ok := schema["url"].(string)
+					canonical := doc.Find("link[rel='canonical']").First().AttrOr("href", "")
+					if !ok || !validID.MatchString(schemaID) || !matchesProductURL(canonical, source) || !matchesProductURL(schemaURL, source) {
+						continue
+					}
+					result.CatalogID = schemaID
+				}
 				result.SourceSchema, err = json.Marshal(schema)
 				if err != nil {
 					return nil, fmt.Errorf("encode product schema: %w", err)
@@ -104,8 +121,7 @@ func parseDetailPage(body []byte, source *url.URL, city, id string) (*detailResu
 			}
 		}
 	}
-	pageID := root.Closest("[data-id]").AttrOr("data-id", "")
-	if pageID != "" && pageID != id {
+	if pageID != "" && pageID != id && result.CatalogID == "" {
 		return nil, fmt.Errorf("requested id %s but page identifies product %s", id, pageID)
 	}
 	if pageID == "" && len(result.SourceSchema) == 0 {
@@ -233,6 +249,14 @@ func parseDetailPage(body []byte, source *url.URL, city, id string) (*detailResu
 		}
 	}
 	return result, nil
+}
+
+func matchesProductURL(raw string, source *url.URL) bool {
+	if raw == "" {
+		return false
+	}
+	parsed, err := url.Parse(raw)
+	return err == nil && source.ResolveReference(parsed).String() == source.String()
 }
 
 func (r *detailResult) concise() {

@@ -103,6 +103,8 @@ Ingredients and dosage remain available as source text. The CLI does not infer e
 
 The site uses slugged product URLs. Search automatically remembers each ID's canonical URL in `os.UserCacheDir()/planeta/products/<city>/`. Product facts are fetched fresh by `id`; this cache stores only the URL mapping. It works across working directories and keeps cities separate. Related package URLs are remembered too.
 
+Some products keep an older ID in their canonical URL while the page uses a different internal catalog SKU. `id` remains the URL ID returned by search; `catalog_id` reports the differing internal SKU when present. The CLI accepts this alias only when the page's canonical link and the product schema both match the requested URL, and the schema SKU matches the visible product's `data-id`. Unverified mismatches still fail. This uses the same two requests and preserves the searchable URL in the cache.
+
 For an ID not previously returned by search, supply its canonical URL:
 
 ```sh
