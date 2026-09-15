@@ -122,7 +122,7 @@ func readCookies(path string) (result []*http.Cookie, err error) {
 
 func (c *client) selectCity(ctx context.Context, city string) error {
 	if !citySlug.MatchString(city) {
-		return fmt.Errorf("invalid city %q: expected a lowercase city URL slug such as kazan", city)
+		return fmt.Errorf("invalid city %q: expected a lowercase city URL slug", city)
 	}
 	u := c.base.ResolveReference(&url.URL{Path: "/" + city + "/"})
 	if _, err := c.get(ctx, u); err != nil {
@@ -206,7 +206,7 @@ func validateProductURL(raw string, base *url.URL, city, id string) (*url.URL, e
 		return nil, fmt.Errorf("invalid product id %q: expected a numeric catalog ID", id)
 	}
 	if !citySlug.MatchString(city) {
-		return nil, fmt.Errorf("invalid city %q: expected a lowercase city URL slug such as kazan", city)
+		return nil, fmt.Errorf("invalid city %q: expected a lowercase city URL slug", city)
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.User != nil || u.Scheme != base.Scheme || u.Host != base.Host || !strings.HasPrefix(u.Path, "/"+city+"/catalog/") || u.RawQuery != "" || u.Fragment != "" {

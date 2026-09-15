@@ -1,12 +1,13 @@
 # planeta
 
-An HTTP-only Go CLI for the public [Planeta Zdorovo catalog](https://planetazdorovo.ru/kazan/), with JSON output and Kazan as the default city. Requires Go 1.25+ to build.
+An HTTP-only Go CLI for the public [Planeta Zdorovo catalog](https://planetazdorovo.ru/), with JSON output and a configurable search city. Requires Go 1.25+ to build.
 
 ## Install and import browser clearance
 
 ```sh
 go install github.com/meoyawn/planeta-cli/cmd/planeta@latest
 planeta auth import --browser chrome
+planeta config set city "<city-slug>"
 planeta search магний хелат
 ```
 
@@ -34,12 +35,25 @@ Search and ID commands reuse valid saved clearance. Expired or rejected authenti
 
 The CLI also saves anonymous cookie renewals returned by successful HTTP requests, including the [expiry extensions supplied by Qrator](https://docs.qrator.net/technologies/tracking-cookie.html). Clearance can still expire after inactivity or a network change; the same human refresh flow handles that. The CLI never launches, controls, or embeds a browser.
 
+## User config
+
+```sh
+planeta config
+planeta config set city "<city-slug>"
+```
+
+Replace `<city-slug>` with the city's URL segment from `https://planetazdorovo.ru/<city-slug>/`. `planeta config` prints the saved preferences as JSON. The only preference is `city`, which starts unset (`""`). Search and ID commands require either a saved city or an explicit `--city`; there is no built-in city default. `--city` overrides the saved value for one invocation. The config command trims whitespace and lowercases the slug before saving.
+
+Preferences are saved in `os.UserConfigDir()/planeta/config.json`, beside `auth.json`: `~/Library/Application Support/planeta/config.json` on macOS, or `$XDG_CONFIG_HOME/planeta/config.json` (normally `~/.config/planeta/config.json`) on Linux. Writes are atomic with an owner-only file. The config contains only the city; timeout, authentication, and pagination remain command options.
+
+Config commands are entirely local: they validate the slug's format without reading browser cookies, making HTTP requests, or maintaining a city lookup cache. The site verifies the selected city when searching or fetching a product. Invalid updates preserve the saved preference, and malformed config files are reported instead of silently ignored.
+
 ## Search
 
 ```sh
 planeta search магний хелат
 planeta search --page 2 магний
-planeta search --city kazan "магний & B6"
+planeta search --city "<city-slug>" "магний & B6"
 ```
 
 Each invocation returns **one page** in the website's default order:
@@ -105,7 +119,7 @@ The site uses slugged product URLs. Search automatically remembers each ID's can
 For an ID not previously returned by search, supply its canonical URL:
 
 ```sh
-planeta id --url "https://planetazdorovo.ru/kazan/catalog/...-15484411/" 15484411
+planeta id --url "https://planetazdorovo.ru/<city-slug>/catalog/...-15484411/" 15484411
 ```
 
 Replace the abbreviated example with the real product URL. Unknown IDs fail locally with guidance to search first. If a product URL changes, repeat search.
@@ -116,7 +130,7 @@ Replace the abbreviated example with the real product URL. Unknown IDs fail loca
 | --- | ---: | --- |
 | `search`, any page or result count | 2 | City page + one search page |
 | `id`, with or without `--full` | 2 | City page + one product page |
-| `auth import`, `auth status`, help | 0 | Local state only |
+| `auth import`, `auth status`, `config`, `config set city`, help | 0 | Local state only |
 
 Commands make **at most two** requests. Site-verification challenges and other failures stop immediately; redirects and retries are disabled. Authentication reads remain entirely local and make zero HTTP requests. No command fetches additional products, pages, images, PDFs, or pharmacy-location AJAX data. Pharmacy availability and “from” prices come from the page; individual pharmacy prices are not fetched.
 
@@ -145,9 +159,9 @@ task check
 
 This runs race tests (`task test`) and the pinned golangci-lint tool (`task lint`), including `go vet`. Tool dependencies live in `tools.mod` and `tools.sum`, separate from the CLI's dependencies. GitHub Actions runs the same check for pull requests and pushes to `main`.
 
-Offline tests cover recorded public HTML, request counts, immediate challenge failures, region selection, pagination, empty searches, negative batch IDs, pharmacy-count extraction (including unknown versus zero and conflicting counts), ingredient and table parsing, default versus full output, explicit auth recovery, expiry/profile diagnostics, cancellation, cookie renewals, browser-import filtering, secret-free auth output, private file permissions, and persistent URL lookup.
+Offline tests cover recorded public HTML, request counts, immediate challenge failures, region selection, pagination, empty searches, negative batch IDs, pharmacy-count extraction (including unknown versus zero and conflicting counts), ingredient and table parsing, default versus full output, explicit auth recovery, expiry/profile diagnostics, cancellation, cookie renewals, browser-import filtering, secret-free auth output, private file permissions, persistent URL lookup, user config, flag overrides, and invalid config updates.
 
-Fixtures contain sanitized public catalog markup and synthetic authentication values. Cookies, account data, browser profiles, and personal recommendations are not included. Catalog prices, counts, availability, and labels can change.
+Fixtures contain sanitized public catalog markup with synthetic city paths and authentication values. Cookies, account data, browser profiles, and personal recommendations are not included. Catalog prices, counts, availability, and labels can change.
 
 To install from a local checkout, run `go install ./cmd/planeta`. The command lives in `cmd/planeta`, so the installed executable is always named `planeta`, independent of the repository name. To build without installing, run `go build -o planeta ./cmd/planeta`.
 

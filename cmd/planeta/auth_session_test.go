@@ -113,7 +113,7 @@ func TestLegacyOverrideDoesNotLoadManagedAuth(t *testing.T) {
 
 func TestCookieChallengeStopsWithImportInstructions(t *testing.T) {
 	t.Parallel()
-	for _, challengePath := range []string{"/kazan/", "/search/", "/kazan/catalog/test-1/"} {
+	for _, challengePath := range []string{"/test-city/", "/search/", "/test-city/catalog/test-1/"} {
 		t.Run(challengePath, func(t *testing.T) {
 			t.Parallel()
 			requests := 0
@@ -130,12 +130,12 @@ func TestCookieChallengeStopsWithImportInstructions(t *testing.T) {
 			})
 			var err error
 			if strings.Contains(challengePath, "/catalog/") {
-				_, err = c.Detail(t.Context(), "1", "kazan", c.base.String()+challengePath)
+				_, err = c.Detail(t.Context(), "1", "test-city", c.base.String()+challengePath)
 			} else {
-				_, err = c.Search(t.Context(), "кора осины", "kazan", 1)
+				_, err = c.Search(t.Context(), "кора осины", "test-city", 1)
 			}
 			wantRequests := 2
-			if challengePath == "/kazan/" {
+			if challengePath == "/test-city/" {
 				wantRequests = 1
 			}
 			if !errors.Is(err, errBrowserCheck) || requests != wantRequests || c.requests != wantRequests {

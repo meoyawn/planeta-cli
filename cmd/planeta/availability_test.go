@@ -60,7 +60,7 @@ func TestConflictingOrOverflowingPharmacyCountsRemainUnknown(t *testing.T) {
 func TestRecordedSearchHasPharmacyCountsForEveryProduct(t *testing.T) {
 	t.Parallel()
 	u := parseTestURL(t, siteOrigin+"/search/?q=магний+хелат")
-	page, err := parseSearchPage(fixture(t, "magnesium-chelate"), u, "kazan")
+	page, err := parseSearchPage(fixture(t, "magnesium-chelate"), u, "test-city")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +80,8 @@ func TestRecordedSearchHasPharmacyCountsForEveryProduct(t *testing.T) {
 
 func TestRecordedDetailRetainsCountsInDefaultAndFullOutput(t *testing.T) {
 	t.Parallel()
-	u := parseTestURL(t, siteOrigin+"/kazan/catalog/test-15484411/")
-	result, err := parseDetailPage(fixture(t, "magnesium-detail"), u, "kazan", "15484411")
+	u := parseTestURL(t, siteOrigin+"/test-city/catalog/test-15484411/")
+	result, err := parseDetailPage(fixture(t, "magnesium-detail"), u, "test-city", "15484411")
 	if err != nil {
 		t.Fatal(err)
 	}
