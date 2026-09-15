@@ -17,14 +17,17 @@ import (
 )
 
 const usage = `Usage:
-  planeta search [--city kazan] [--page 1] <query>
-  planeta id [--full] [--city kazan] [--url URL] <id>
+  planeta search [--city CITY] [--page 1] <query>
+  planeta id [--full] [--city CITY] [--url URL] <id>
+  planeta config
+  planeta config set city <slug>
   planeta auth import --browser <browser> [--browser-profile PROFILE]
   planeta auth status
 
 Search fetches one page. ID fetches one product; --full includes all instructions.
+City comes from --city or user config; there is no default city.
 Search and id: at most 2 HTTP requests. No retries.
-Auth and help: 0 HTTP requests. No browser automation or automatic pagination.
+Auth, config, and help: 0 HTTP requests. No browser automation or automatic pagination.
 If authentication fails, run planeta auth import --browser chrome (or your browser),
 then retry the command. The CLI does not wait for refreshed cookies.
 `
@@ -40,6 +43,10 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	return runWithPaths(ctx, args, stdout, stderr, defaultPaths)
+}
+
+func runWithPaths(ctx context.Context, args []string, stdout, stderr io.Writer, locatePaths func() (appPaths, error)) error {
 	if len(args) == 0 {
 		return fmt.Errorf("missing command; %s", usage)
 	}
@@ -49,6 +56,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	case "auth":
 		return runAuth(ctx, args[1:], stdout, stderr)
+	case "config":
+		paths, err := locatePaths()
+		if err != nil {
+			return err
+		}
+		return runConfig(ctx, args[1:], stdout, paths.config)
 	case "search", "id":
 	default:
 		return fmt.Errorf("unknown command %q; %s", args[0], usage)
@@ -56,7 +69,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	city := flags.String("city", "kazan", "city URL slug")
+	city := flags.String("city", "", "city URL slug (overrides user config)")
 	cookieFile := flags.String("cookie-file", os.Getenv("PLANETA_COOKIE_FILE"), "optional legacy Cookie header file; normally use auth import")
 	timeout := flags.Duration("timeout", 90*time.Second, "timeout for the entire command")
 	userAgent := flags.String("user-agent", defaultUserAgent, "HTTP User-Agent")
@@ -76,7 +89,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if *timeout <= 0 {
 		return fmt.Errorf("timeout %q must be positive", timeout.String())
 	}
-	paths, err := defaultPaths()
+	paths, err := locatePaths()
 	if err != nil {
 		return err
 	}
@@ -94,16 +107,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		if !validID.MatchString(id) {
 			return fmt.Errorf("invalid product id %q: expected a numeric catalog ID", id)
 		}
-		if sourceURL == "" {
-			sourceURL, err = paths.lookup(*city, id)
-			if err != nil {
-				return err
-			}
-		}
 	}
 	// Validate before loading authentication or sending HTTP requests.
-	if !citySlug.MatchString(*city) {
-		return fmt.Errorf("invalid city %q: expected a lowercase city URL slug such as kazan", *city)
+	if err := applySavedCity(flags, paths.config); err != nil {
+		return err
+	}
+	if err := validateCity(*city); err != nil {
+		return err
 	}
 	if command == "search" && page < 1 {
 		return fmt.Errorf("page %d must be at least 1", page)
@@ -112,6 +122,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("user-agent must be nonempty and contain no newlines")
 	}
 	if command == "id" {
+		if sourceURL == "" {
+			sourceURL, err = paths.lookup(*city, id)
+			if err != nil {
+				return err
+			}
+		}
 		base, err := url.Parse(siteOrigin)
 		if err != nil {
 			return fmt.Errorf("parse catalog origin: %w", err)

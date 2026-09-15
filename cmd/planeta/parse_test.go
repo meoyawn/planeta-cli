@@ -19,7 +19,7 @@ func fixture(t *testing.T, name string) []byte {
 func TestParseRecordedSearchMatchesChrome(t *testing.T) {
 	t.Parallel()
 	u := parseTestURL(t, "https://planetazdorovo.ru/search/?q=магний+хелат")
-	page, err := parseSearchPage(fixture(t, "magnesium-chelate"), u, "kazan")
+	page, err := parseSearchPage(fixture(t, "magnesium-chelate"), u, "test-city")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestNoMatchesDoesNotReturnRecommendations(t *testing.T) {
 	if !strings.Contains(string(body), `data-count_element="6"`) {
 		t.Fatal("fixture must include the website's six recommendations")
 	}
-	page, err := parseSearchPage(body, u, "kazan")
+	page, err := parseSearchPage(body, u, "test-city")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestNoMatchesDoesNotReturnRecommendations(t *testing.T) {
 func TestNoMatchesWithQueryInHeading(t *testing.T) {
 	t.Parallel()
 	u := parseTestURL(t, "https://planetazdorovo.ru/search/?q=15484411")
-	page, err := parseSearchPage([]byte(`<h1>По запросу "<b>15484411</b>" ничего не найдено</h1>`), u, "kazan")
+	page, err := parseSearchPage([]byte(`<h1>По запросу "<b>15484411</b>" ничего не найдено</h1>`), u, "test-city")
 	if err != nil || page.total != 0 || len(page.products) != 0 {
 		t.Fatalf("zero-match heading rejected: page=%+v error=%v", page, err)
 	}
@@ -69,7 +69,7 @@ func TestNoMatchesWithQueryInHeading(t *testing.T) {
 func TestDiscountedBatchesWithoutSchemaMetadataAreIncluded(t *testing.T) {
 	t.Parallel()
 	u := parseTestURL(t, "https://planetazdorovo.ru/search/?q=магний&PAGEN_1=2")
-	page, err := parseSearchPage(fixture(t, "discounted-batches"), u, "kazan")
+	page, err := parseSearchPage(fixture(t, "discounted-batches"), u, "test-city")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,13 +104,13 @@ func TestParserRejectsIncompleteOrChangedMarkup(t *testing.T) {
 		"missing heading":            "<html><body>Temporarily unavailable</body></html>",
 		"missing cards":              strings.ReplaceAll(body, `data-name="Результаты_поиска"`, `data-name="changed"`),
 		"different pagination total": strings.ReplaceAll(body, `data-count_element="15"`, `data-count_element="16"`),
-		"wrong city":                 strings.ReplaceAll(body, "/kazan/catalog/", "/moskva/catalog/"),
+		"wrong city":                 strings.ReplaceAll(body, "/test-city/catalog/", "/other-city/catalog/"),
 		"bad price":                  strings.Replace(body, `content="2163.00"`, `content="NaN"`, 1),
 	}
 	for name, input := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := parseSearchPage([]byte(input), u, "kazan"); err == nil {
+			if _, err := parseSearchPage([]byte(input), u, "test-city"); err == nil {
 				t.Fatal("expected an error instead of misleading results")
 			}
 		})
@@ -121,7 +121,7 @@ func TestCountComesFromHeadingSuffix(t *testing.T) {
 	t.Parallel()
 	u := parseTestURL(t, "https://planetazdorovo.ru/search/?q=test")
 	body := strings.Replace(string(fixture(t, "magnesium-chelate")), "<b>магний хелат</b>", "<b>найдено 999 товаров</b>", 1)
-	page, err := parseSearchPage([]byte(body), u, "kazan")
+	page, err := parseSearchPage([]byte(body), u, "test-city")
 	if err != nil || page.total != 15 {
 		t.Fatalf("query text confused the result count: page=%+v err=%v", page, err)
 	}

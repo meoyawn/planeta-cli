@@ -11,6 +11,7 @@ import (
 
 type appPaths struct {
 	auth   string
+	config string
 	index  string
 	legacy string
 }
@@ -30,6 +31,7 @@ func defaultPaths() (appPaths, error) {
 	}
 	return appPaths{
 		auth:   filepath.Join(config, "planeta", "auth.json"),
+		config: filepath.Join(config, "planeta", "config.json"),
 		index:  filepath.Join(cache, "planeta", "products"),
 		legacy: filepath.Join(home, ".config"),
 	}, nil
