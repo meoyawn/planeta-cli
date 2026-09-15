@@ -22,23 +22,20 @@ const defaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 const maxPageBytes = 16 << 20
 const requestBudget = 2
 
-var errBrowserCheck = errors.New("site verification needs a fresh Planeta cookie; reload https://planetazdorovo.ru/ in your existing browser, wait until the catalog appears, then run planeta auth import --browser chrome --wait 2m; no need to sign out")
+var errBrowserCheck = errors.New("site verification failed; run planeta auth import --browser chrome (or your browser), then retry the command")
 var citySlug = regexp.MustCompile("^[a-z0-9]+(?:-[a-z0-9]+)*$")
 var validID = regexp.MustCompile("^-?[1-9][0-9]*$")
 
 type client struct {
-	http           *http.Client
-	base           *url.URL
-	userAgent      string
-	requests       int
-	refreshCookies func(context.Context, []*http.Cookie) ([]*http.Cookie, error)
-	saveCookies    func([]*http.Cookie) error
-	refreshed      bool
+	http        *http.Client
+	base        *url.URL
+	userAgent   string
+	requests    int
+	saveCookies func([]*http.Cookie) error
 }
 
 // Each client belongs to one invocation: city selection and one data page.
-// Redirects, automatic pagination, and ordinary retries are disabled. A browser
-// cookie refresh may retry the challenged GET once, with one extra request.
+// Redirects, automatic pagination, and retries are disabled.
 func newClient(origin, userAgent string, cookies []*http.Cookie) (*client, error) {
 	base, err := url.Parse(origin)
 	if err != nil || base.Host == "" || (base.Scheme != "https" && base.Scheme != "http") || base.User != nil {
@@ -125,7 +122,7 @@ func readCookies(path string) (result []*http.Cookie, err error) {
 
 func (c *client) selectCity(ctx context.Context, city string) error {
 	if !citySlug.MatchString(city) {
-		return fmt.Errorf("invalid city %q: expected a lowercase city URL slug such as kazan", city)
+		return fmt.Errorf("invalid city %q: expected a lowercase city URL slug", city)
 	}
 	u := c.base.ResolveReference(&url.URL{Path: "/" + city + "/"})
 	if _, err := c.get(ctx, u); err != nil {
@@ -209,7 +206,7 @@ func validateProductURL(raw string, base *url.URL, city, id string) (*url.URL, e
 		return nil, fmt.Errorf("invalid product id %q: expected a numeric catalog ID", id)
 	}
 	if !citySlug.MatchString(city) {
-		return nil, fmt.Errorf("invalid city %q: expected a lowercase city URL slug such as kazan", city)
+		return nil, fmt.Errorf("invalid city %q: expected a lowercase city URL slug", city)
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.User != nil || u.Scheme != base.Scheme || u.Host != base.Host || !strings.HasPrefix(u.Path, "/"+city+"/catalog/") || u.RawQuery != "" || u.Fragment != "" {
@@ -231,42 +228,12 @@ func (c *client) cookieValue(name string) string {
 	return ""
 }
 
-func (c *client) get(ctx context.Context, target *url.URL) ([]byte, error) {
-	rejected := c.http.Jar.Cookies(c.base)
-	body, err := c.getOnce(ctx, target)
-	if !errors.Is(err, errBrowserCheck) || c.refreshCookies == nil || c.refreshed {
-		return body, err
-	}
-	c.refreshed = true
-	cookies, err := c.refreshCookies(ctx, rejected)
-	if err != nil {
-		return nil, err
-	}
-	// Preserve the requested city when the challenge occurs on the data page.
-	// Browser city preferences must not change a search halfway through.
-	for _, cookie := range c.http.Jar.Cookies(c.base) {
-		if isClearanceCookie(cookie.Name) {
-			c.http.Jar.SetCookies(c.base, []*http.Cookie{{Name: cookie.Name, Path: "/", MaxAge: -1}}) // #nosec G124 -- Expire a local jar entry; this does not issue a server cookie.
-		}
-	}
-	for _, cookie := range cookies {
-		if isClearanceCookie(cookie.Name) {
-			c.http.Jar.SetCookies(c.base, []*http.Cookie{cookie})
-		}
-	}
-	return c.getOnce(ctx, target)
-}
-
-func (c *client) getOnce(ctx context.Context, target *url.URL) (body []byte, err error) {
+func (c *client) get(ctx context.Context, target *url.URL) (body []byte, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	budget := requestBudget
-	if c.refreshed {
-		budget++
-	}
-	if c.requests >= budget {
-		return nil, fmt.Errorf("HTTP request budget of %d exhausted", budget)
+	if c.requests >= requestBudget {
+		return nil, fmt.Errorf("HTTP request budget of %d exhausted", requestBudget)
 	}
 	if target.Scheme != c.base.Scheme || target.Host != c.base.Host {
 		return nil, fmt.Errorf("refusing request outside the catalog origin")

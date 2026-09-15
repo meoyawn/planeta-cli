@@ -40,7 +40,7 @@ func TestBrowserImportScopeFilteringAndSecretFreeJSON(t *testing.T) {
 		}
 		return sweetcookie.Result{Cookies: []sweetcookie.Cookie{
 			{Name: "qrator_jsid2", Value: "secret-clearance", Domain: ".planetazdorovo.ru", Path: "/", Expires: &expires, Secure: true},
-			{Name: "city_code", Value: "kazan", Domain: "planetazdorovo.ru", Path: "/"},
+			{Name: "city_code", Value: "test-city", Domain: "planetazdorovo.ru", Path: "/"},
 			{Name: "PHPSESSID", Value: "private-account", Domain: "planetazdorovo.ru", Path: "/"},
 			{Name: "qrator_jsid2", Value: "other-site", Domain: "other.example", Path: "/"},
 		}}, nil
@@ -88,7 +88,7 @@ func TestFailedImportPreservesPreviousStore(t *testing.T) {
 	_, err = importBrowserCookies(t.Context(), browser, "", path, func(context.Context, sweetcookie.Options) (sweetcookie.Result, error) {
 		return sweetcookie.Result{Cookies: []sweetcookie.Cookie{
 			{Name: "qrator_jsid2", Value: "expired", Domain: "planetazdorovo.ru", Path: "/", Expires: &expires},
-			{Name: "city_code", Value: "kazan", Domain: "planetazdorovo.ru", Path: "/"},
+			{Name: "city_code", Value: "test-city", Domain: "planetazdorovo.ru", Path: "/"},
 		}, Warnings: []string{"test keychain warning"}}, nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "test keychain warning") {
@@ -109,33 +109,33 @@ func TestFailedImportPreservesPreviousStore(t *testing.T) {
 func TestProductURLIndexPersistsAcrossSearchesAndCities(t *testing.T) {
 	t.Parallel()
 	p := appPaths{index: filepath.Join(t.TempDir(), "products")}
-	for _, test := range []struct{ city, id string }{{"kazan", "1"}, {"kazan", "2"}, {"perm", "1"}, {"kazan", "-157028"}} {
+	for _, test := range []struct{ city, id string }{{"test-city", "1"}, {"test-city", "2"}, {"other-city", "1"}, {"test-city", "-157028"}} {
 		item := product{ID: test.id, URL: siteOrigin + "/" + test.city + "/catalog/test-" + test.id + "/"}
 		if err := p.remember(test.city, []product{item}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, city := range []string{"kazan", "perm"} {
+	for _, city := range []string{"test-city", "other-city"} {
 		got, err := p.lookup(city, "1")
 		if err != nil || !strings.Contains(got, "/"+city+"/") {
 			t.Fatalf("lookup %q: %q %v", city, got, err)
 		}
 	}
-	if _, err := p.lookup("kazan", "3"); err == nil || !strings.Contains(err.Error(), "search first") {
+	if _, err := p.lookup("test-city", "3"); err == nil || !strings.Contains(err.Error(), "search first") {
 		t.Fatalf("unknown ID not actionable: %v", err)
 	}
 	if _, err := p.lookup("../unsafe", "1"); err == nil {
 		t.Fatal("accepted unsafe city")
 	}
-	if err := p.remember("kazan", []product{{ID: "1", URL: "https://other.example/kazan/catalog/test-1/"}}); err == nil {
+	if err := p.remember("test-city", []product{{ID: "1", URL: "https://other.example/test-city/catalog/test-1/"}}); err == nil {
 		t.Fatal("saved external URL")
 	}
 }
 
 func TestRecordedDetailAndConciseOutput(t *testing.T) {
 	t.Parallel()
-	u := parseTestURL(t, siteOrigin+"/kazan/catalog/test-15484411/")
-	result, err := parseDetailPage(fixture(t, "magnesium-detail"), u, "kazan", "15484411")
+	u := parseTestURL(t, siteOrigin+"/test-city/catalog/test-15484411/")
+	result, err := parseDetailPage(fixture(t, "magnesium-detail"), u, "test-city", "15484411")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,13 +177,13 @@ func TestRecordedDetailAndConciseOutput(t *testing.T) {
 
 func TestDefaultIDPreservesEntireExcipientListAndSorbitolWarning(t *testing.T) {
 	t.Parallel()
-	u := parseTestURL(t, siteOrigin+"/kazan/catalog/test-1/")
+	u := parseTestURL(t, siteOrigin+"/test-city/catalog/test-1/")
 	excipients := "Карбонат кальция, гидроксипропилметилцеллюлоза, твин 80 (эмульгатор), полиэтиленгликоль, тальк; сорбит, мальтодекстрин; целлюлоза микрокристаллическая, кроскарамеллоза; стеарат кальция."
 	note := "Содержит подсластитель сорбит, который при чрезмерном употреблении может оказывать слабительное действие."
 	body := []byte(`<div class="product-detail" data-id="1"><h1>Магний 60 шт</h1></div>
 <div class="product-detail-description-content__item" id="instruction_COMPOSITION"><h3>Состав</h3><div class="product-detail-description-content__item-content"><b>Активное вещество:</b><br>Магния бисглицинат.<br><br>Содержание активных веществ в 1 таблетке:<br>Магний 200 мг<br><b>Вспомогательные вещества:</b><br>` + excipients + `<br><br>` + note + `<br><b>Описание:</b><br>Marketing copy.</div></div>
 <div class="product-detail-description-content__item" id="instruction_USEMETHODANDDOSES"><h3>Дозы</h3><div class="product-detail-description-content__item-content">Take with meals.</div></div>`)
-	result, err := parseDetailPage(body, u, "kazan", "1")
+	result, err := parseDetailPage(body, u, "test-city", "1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,11 +228,11 @@ func TestPackageFactsUseExplicitQuantityAndDoNotMistakeStrengthForSize(t *testin
 
 func TestInstructionTablesRetainCellBoundaries(t *testing.T) {
 	t.Parallel()
-	u := parseTestURL(t, siteOrigin+"/kazan/catalog/test-1/")
+	u := parseTestURL(t, siteOrigin+"/test-city/catalog/test-1/")
 	body := []byte(`<div class="product-detail" data-id="1"><h1>Test</h1></div>
 <div class="product-detail-description-content__item" id="instruction_COMPOSITION"><h3>Состав</h3><div class="product-detail-description-content__item-content">
 <table><tr><th>Вещество</th><th>В 2 капсулах</th></tr><tr><td>Магний</td><td>200 мг</td></tr><tr><td>B6</td><td>2 мг</td></tr></table></div></div>`)
-	result, err := parseDetailPage(body, u, "kazan", "1")
+	result, err := parseDetailPage(body, u, "test-city", "1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,10 +250,10 @@ func TestInstructionTablesRetainCellBoundaries(t *testing.T) {
 
 func TestMissingCompositionIsReportedEvenWithGenericDisclaimer(t *testing.T) {
 	t.Parallel()
-	u := parseTestURL(t, siteOrigin+"/kazan/catalog/test-1/")
+	u := parseTestURL(t, siteOrigin+"/test-city/catalog/test-1/")
 	body := []byte(`<div class="product-detail" data-id="1"><h1>Test</h1></div>
 <div class="product-detail-description-content__item" id="instruction_description"><h3>Информация</h3><div class="product-detail-description-content__item-content">Generic site disclaimer.</div></div>`)
-	result, err := parseDetailPage(body, u, "kazan", "1")
+	result, err := parseDetailPage(body, u, "test-city", "1")
 	if err != nil {
 		t.Fatal(err)
 	}

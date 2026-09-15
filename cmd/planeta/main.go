@@ -17,16 +17,19 @@ import (
 )
 
 const usage = `Usage:
-  planeta search [--city kazan] [--page 1] <query>
-  planeta id [--full] [--city kazan] [--url URL] <id>
-  planeta auth import --browser <browser> [--browser-profile PROFILE] [--wait 2m]
+  planeta search [--city CITY] [--page 1] <query>
+  planeta id [--full] [--city CITY] [--url URL] <id>
+  planeta config
+  planeta config set city <slug>
+  planeta auth import --browser <browser> [--browser-profile PROFILE]
   planeta auth status
 
 Search fetches one page. ID fetches one product; --full includes all instructions.
-Search and id: normally 2 HTTP requests; at most 3 with one cookie-refresh retry.
-Auth and help: 0 HTTP requests. No browser automation or automatic pagination.
-If cookies need refreshing, reload the site in your existing browser; the CLI
-waits for cookies saved to disk. --auth-wait 0 disables waiting in search/id.
+City comes from --city or user config; there is no default city.
+Search and id: at most 2 HTTP requests. No retries.
+Auth, config, and help: 0 HTTP requests. No browser automation or automatic pagination.
+If authentication fails, run planeta auth import --browser chrome (or your browser),
+then retry the command. The CLI does not wait for refreshed cookies.
 `
 
 func main() {
@@ -40,6 +43,10 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	return runWithPaths(ctx, args, stdout, stderr, defaultPaths)
+}
+
+func runWithPaths(ctx context.Context, args []string, stdout, stderr io.Writer, locatePaths func() (appPaths, error)) error {
 	if len(args) == 0 {
 		return fmt.Errorf("missing command; %s", usage)
 	}
@@ -49,6 +56,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	case "auth":
 		return runAuth(ctx, args[1:], stdout, stderr)
+	case "config":
+		paths, err := locatePaths()
+		if err != nil {
+			return err
+		}
+		return runConfig(ctx, args[1:], stdout, paths.config)
 	case "search", "id":
 	default:
 		return fmt.Errorf("unknown command %q; %s", args[0], usage)
@@ -56,10 +69,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	city := flags.String("city", "kazan", "city URL slug")
+	city := flags.String("city", "", "city URL slug (overrides user config)")
 	cookieFile := flags.String("cookie-file", os.Getenv("PLANETA_COOKIE_FILE"), "optional legacy Cookie header file; normally use auth import")
 	timeout := flags.Duration("timeout", 90*time.Second, "timeout for the entire command")
-	authWait := flags.Duration("auth-wait", defaultAuthWait(stderr), "wait for browser cookies after a manual reload (90s in a terminal, 0 otherwise)")
 	userAgent := flags.String("user-agent", defaultUserAgent, "HTTP User-Agent")
 	page, full, sourceURL := 1, false, ""
 	if command == "search" {
@@ -77,10 +89,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if *timeout <= 0 {
 		return fmt.Errorf("timeout %q must be positive", timeout.String())
 	}
-	if *authWait < 0 {
-		return fmt.Errorf("auth-wait %q must not be negative", authWait.String())
-	}
-	paths, err := defaultPaths()
+	paths, err := locatePaths()
 	if err != nil {
 		return err
 	}
@@ -98,16 +107,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		if !validID.MatchString(id) {
 			return fmt.Errorf("invalid product id %q: expected a numeric catalog ID", id)
 		}
-		if sourceURL == "" {
-			sourceURL, err = paths.lookup(*city, id)
-			if err != nil {
-				return err
-			}
-		}
 	}
-	// Validate before reading browser stores or asking the user to refresh a tab.
-	if !citySlug.MatchString(*city) {
-		return fmt.Errorf("invalid city %q: expected a lowercase city URL slug such as kazan", *city)
+	// Validate before loading authentication or sending HTTP requests.
+	if err := applySavedCity(flags, paths.config); err != nil {
+		return err
+	}
+	if err := validateCity(*city); err != nil {
+		return err
 	}
 	if command == "search" && page < 1 {
 		return fmt.Errorf("page %d must be at least 1", page)
@@ -116,6 +122,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("user-agent must be nonempty and contain no newlines")
 	}
 	if command == "id" {
+		if sourceURL == "" {
+			sourceURL, err = paths.lookup(*city, id)
+			if err != nil {
+				return err
+			}
+		}
 		base, err := url.Parse(siteOrigin)
 		if err != nil {
 			return fmt.Errorf("parse catalog origin: %w", err)
@@ -126,7 +138,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
-	session, cookies, err := loadAuthSession(ctx, paths, *cookieFile, *authWait, stderr, sweetcookie.Get)
+	session, cookies, err := loadAuthSession(paths, *cookieFile)
 	if err != nil {
 		return err
 	}
@@ -136,7 +148,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	defer client.http.CloseIdleConnections()
 	if session != nil {
-		client.refreshCookies = session.refresh
 		client.saveCookies = session.saveCookies
 	}
 	if command == "search" {
@@ -177,7 +188,6 @@ func runAuth(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		flags.SetOutput(stderr)
 		browserName := flags.String("browser", "", "browser to import from, e.g. chrome, brave, edge, firefox, safari")
 		profile := flags.String("browser-profile", "", "profile directory or cookie file; Chrome: copy Profile Path from chrome://version")
-		wait := flags.Duration("wait", defaultAuthWait(stderr), "wait for cookies saved after a manual browser reload (90s in a terminal, 0 otherwise)")
 		if err := parseOptions(flags, args[1:], false); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				return nil
@@ -187,9 +197,6 @@ func runAuth(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		if flags.NArg() != 0 {
 			return fmt.Errorf("unexpected auth import arguments: %q", flags.Args())
 		}
-		if *wait < 0 {
-			return fmt.Errorf("wait %q must not be negative", wait.String())
-		}
 		browser, err := NewBrowserFromValue(*browserName)
 		if err != nil {
 			return err
@@ -198,13 +205,10 @@ func runAuth(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		if err != nil {
 			return err
 		}
-		importer := authImporter{browser: browser, profile: *profile, path: paths.auth, wait: *wait, output: stderr, read: sweetcookie.Get}
-		store, warnings, err := importer.importCookies(ctx, nil)
+		result, err := importBrowserCookies(ctx, browser, *profile, paths.auth, sweetcookie.Get)
 		if err != nil {
 			return err
 		}
-		result := store.summary(paths.auth)
-		result.Warnings = warnings
 		return writeJSON(stdout, result)
 	case "status":
 		if len(args) != 1 {
@@ -216,14 +220,18 @@ func runAuth(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		}
 		store, err := loadAuth(paths.auth)
 		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("no browser cookies imported; run planeta auth import --browser chrome --wait 2m (or select your browser)")
+			return fmt.Errorf("no browser cookies imported; run planeta auth import --browser chrome (or select your browser)")
 		}
 		if err != nil {
 			return err
 		}
 		result := store.summary(paths.auth)
 		if !store.hasClearance(time.Now()) {
-			result.Warnings = append(result.Warnings, "Saved clearance has expired. Your next search will try importing fresh cookies from the same browser. If asked, reload the site in your existing browser and leave the tab open; no need to sign out.")
+			browser, err := NewBrowserFromValue(store.Browser)
+			if err != nil {
+				return err
+			}
+			result.Warnings = append(result.Warnings, fmt.Sprintf("Saved clearance has expired; run planeta auth import --browser %s", browser.value))
 		}
 		return writeJSON(stdout, result)
 	default:

@@ -88,14 +88,14 @@ func TestDetailAliasUsesTwoRequests(t *testing.T) {
 		if selectMockCity(t, w, r) {
 			return
 		}
-		if r.URL.Path != "/kazan/catalog/ibuprofen-gel-dlya-5584/" {
+		if r.URL.Path != "/test-city/catalog/ibuprofen-gel-dlya-5584/" {
 			t.Errorf("unexpected request: %s", r.URL)
 		}
 		// Relative canonical/schema URLs resolve against the requested page.
 		writeTestResponse(t, w, aliasDetailHTML(t, "30278703", r.URL.Path, "30278703", r.URL.Path, "Ибупрофен"))
 	})
-	u := c.base.String() + "/kazan/catalog/ibuprofen-gel-dlya-5584/"
-	result, err := c.Detail(t.Context(), "5584", "kazan", u)
+	u := c.base.String() + "/test-city/catalog/ibuprofen-gel-dlya-5584/"
+	result, err := c.Detail(t.Context(), "5584", "test-city", u)
 	if err != nil {
 		t.Fatal(err)
 	}

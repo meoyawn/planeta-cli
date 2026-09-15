@@ -1,23 +1,23 @@
 # planeta
 
-An HTTP-only Go CLI for the public [Planeta Zdorovo catalog](https://planetazdorovo.ru/kazan/), with JSON output and Kazan as the default city. Requires Go 1.25+ to build.
+An HTTP-only Go CLI for the public [Planeta Zdorovo catalog](https://planetazdorovo.ru/), with JSON output and a configurable search city. Requires Go 1.25+ to build.
 
 ## Install and import browser clearance
 
 ```sh
 go install github.com/meoyawn/planeta-cli/cmd/planeta@latest
 planeta auth import --browser chrome
+planeta config set city "<city-slug>"
 planeta search магний хелат
 ```
 
-Use your existing browser window. You do not need to sign out or create a pharmacy account. If cookies need refreshing, the CLI asks you to reload the site and leave the tab open until the catalog appears.
+Use your existing browser window. You do not need to sign out or create a pharmacy account. If authentication fails, run `planeta auth import --browser chrome` (or select your browser), then retry the command. If import fails, reload the site in that browser until the catalog appears and rerun import.
 
 Import uses [Sweet Cookie v0.0.2](https://github.com/steipete/sweetcookie), following the browser-import approach in [spogo](https://github.com/openclaw/spogo). It reads the selected browser's local cookie store; it does not launch or automate a browser. macOS may show a Keychain prompt.
 
 ```sh
 planeta auth import --browser firefox
 planeta auth import --browser chrome --browser-profile "Profile 1"
-planeta auth import --browser chrome --wait 2m
 planeta auth status
 ```
 
@@ -27,20 +27,33 @@ Only `qrator_jsid`, `qrator_jsid2`, `city_id`, `city_code`, and `region_id` for 
 
 The CLI manages `auth.json` automatically under `os.UserConfigDir()/planeta/`: on macOS, `~/Library/Application Support/planeta/auth.json`; on Linux, normally `~/.config/planeta/auth.json`. The file has owner-only permissions. There is no manual cookie-file maintenance.
 
-**A working browser tab does not always mean its cookies are saved to disk yet.** Chrome can be using fresh cookies while the importer still sees the expired copy. In a terminal, `auth import` waits up to 90 seconds, checking the cookie file every two seconds. It explains which profile/file it read, when the last saved clearance expired, and what to do. Refresh the site yourself; the CLI imports the fresh cookies and continues as soon as the browser saves them. Ctrl-C cancels. Use `--wait 2m` for a longer wait, or `--wait 0` to check once. Without an interactive terminal, waiting defaults to zero, so scripts do not hang unexpectedly.
+`auth import` checks the saved browser cookies and returns immediately with recovery instructions if none are usable. There is no polling or waiting for a browser refresh, in terminals or scripts.
 
-For Chrome profile selection, open `chrome://version` in the working window and copy **Profile Path** into `--browser-profile`. A friendly name such as “Your Chrome” can differ from the profile directory, such as `Default`. New imports remember the actual cookie-store path for future refreshes. Private-window cookies cannot be imported from disk.
+For Chrome profile selection, open `chrome://version` in the working window and copy **Profile Path** into `--browser-profile`. A friendly name such as “Your Chrome” can differ from the profile directory, such as `Default`. New imports remember the actual cookie-store path in the auth metadata. Private-window cookies cannot be imported from disk.
 
-Search and ID commands reuse valid saved clearance. When it expires, they first try importing fresh cookies from the remembered browser profile. If the site rejects clearance earlier, they refresh cookies and retry only the challenged request, once. If the browser still has the rejected cookie, the CLI asks you to reload and waits for a changed cookie before retrying. `--auth-wait` controls this wait (90 seconds in a terminal, zero otherwise), within the overall `--timeout`.
+Search and ID commands reuse valid saved clearance. Expired or rejected authentication stops the command with instructions to run `planeta auth import --browser chrome` (or your browser). Browser imports happen only through `auth import`.
 
 The CLI also saves anonymous cookie renewals returned by successful HTTP requests, including the [expiry extensions supplied by Qrator](https://docs.qrator.net/technologies/tracking-cookie.html). Clearance can still expire after inactivity or a network change; the same human refresh flow handles that. The CLI never launches, controls, or embeds a browser.
+
+## User config
+
+```sh
+planeta config
+planeta config set city "<city-slug>"
+```
+
+Replace `<city-slug>` with the city's URL segment from `https://planetazdorovo.ru/<city-slug>/`. `planeta config` prints the saved preferences as JSON. The only preference is `city`, which starts unset (`""`). Search and ID commands require either a saved city or an explicit `--city`; there is no built-in city default. `--city` overrides the saved value for one invocation. The config command trims whitespace and lowercases the slug before saving.
+
+Preferences are saved in `os.UserConfigDir()/planeta/config.json`, beside `auth.json`: `~/Library/Application Support/planeta/config.json` on macOS, or `$XDG_CONFIG_HOME/planeta/config.json` (normally `~/.config/planeta/config.json`) on Linux. Writes are atomic with an owner-only file. The config contains only the city; timeout, authentication, and pagination remain command options.
+
+Config commands are entirely local: they validate the slug's format without reading browser cookies, making HTTP requests, or maintaining a city lookup cache. The site verifies the selected city when searching or fetching a product. Invalid updates preserve the saved preference, and malformed config files are reported instead of silently ignored.
 
 ## Search
 
 ```sh
 planeta search магний хелат
 planeta search --page 2 магний
-planeta search --city kazan "магний & B6"
+planeta search --city "<city-slug>" "магний & B6"
 ```
 
 Each invocation returns **one page** in the website's default order:
@@ -108,7 +121,7 @@ Some products keep an older ID in their canonical URL while the page uses a diff
 For an ID not previously returned by search, supply its canonical URL:
 
 ```sh
-planeta id --url "https://planetazdorovo.ru/kazan/catalog/...-15484411/" 15484411
+planeta id --url "https://planetazdorovo.ru/<city-slug>/catalog/...-15484411/" 15484411
 ```
 
 Replace the abbreviated example with the real product URL. Unknown IDs fail locally with guidance to search first. If a product URL changes, repeat search.
@@ -119,9 +132,9 @@ Replace the abbreviated example with the real product URL. Unknown IDs fail loca
 | --- | ---: | --- |
 | `search`, any page or result count | 2 | City page + one search page |
 | `id`, with or without `--full` | 2 | City page + one product page |
-| `auth import`, `auth status`, help | 0 | Local state only |
+| `auth import`, `auth status`, `config`, `config set city`, help | 0 | Local state only |
 
-Normal commands make **at most two** requests. A site-verification challenge permits one additional request after cookie refresh, for a maximum of **three**. `http_requests` includes that retry. Authentication reads and waits remain entirely local and make zero HTTP requests. Other failures stop immediately; redirects and transport retries are disabled. No command fetches additional products, pages, images, PDFs, or pharmacy-location AJAX data. Pharmacy availability and “from” prices come from the page; individual pharmacy prices are not fetched.
+Commands make **at most two** requests. Site-verification challenges and other failures stop immediately; redirects and retries are disabled. Authentication reads remain entirely local and make zero HTTP requests. No command fetches additional products, pages, images, PDFs, or pharmacy-location AJAX data. Pharmacy availability and “from” prices come from the page; individual pharmacy prices are not fetched.
 
 Put any iteration outside the CLI. For example, in fish:
 
@@ -136,7 +149,7 @@ With valid clearance, the 15-result example costs 2 search requests plus 15 × 2
 
 Flags can appear before or after positional arguments. A literal `--` ends option parsing. `--timeout` defaults to 90 seconds for the entire command. `--user-agent` can match the importing browser if necessary. Success emits one JSON object to stdout; errors go to stderr and exit nonzero.
 
-For compatibility, `--cookie-file` / `PLANETA_COOKIE_FILE` can still override imported cookies with a legacy Cookie-header file. Explicit overrides disable automatic browser imports. If no managed auth store exists, `~/.config/planeta/cookies` and then `.planeta-cookies` are fallback sources. Managed imports take precedence over those legacy defaults.
+For compatibility, `--cookie-file` / `PLANETA_COOKIE_FILE` can still override imported cookies with a legacy Cookie-header file. If no managed auth store exists, `~/.config/planeta/cookies` and then `.planeta-cookies` are fallback sources. Managed imports take precedence over those legacy defaults.
 
 ## Verification
 
@@ -148,9 +161,9 @@ task check
 
 This runs race tests (`task test`) and the pinned golangci-lint tool (`task lint`), including `go vet`. Tool dependencies live in `tools.mod` and `tools.sum`, separate from the CLI's dependencies. GitHub Actions runs the same check for pull requests and pushes to `main`.
 
-Offline tests cover recorded public HTML, request counts, bounded challenge recovery, region selection during refresh, pagination, empty searches, negative batch IDs, pharmacy-count extraction (including unknown versus zero and conflicting counts), ingredient and table parsing, default versus full output, delayed browser cookie saves, expiry/profile diagnostics, cancellation, noninteractive behavior, cookie renewals, browser-import filtering, secret-free auth output, private file permissions, and persistent URL lookup.
+Offline tests cover recorded public HTML, request counts, immediate challenge failures, region selection, pagination, empty searches, negative batch IDs, pharmacy-count extraction (including unknown versus zero and conflicting counts), ingredient and table parsing, default versus full output, explicit auth recovery, expiry/profile diagnostics, cancellation, cookie renewals, browser-import filtering, secret-free auth output, private file permissions, persistent URL lookup, user config, flag overrides, and invalid config updates.
 
-Fixtures contain sanitized public catalog markup and synthetic authentication values. Cookies, account data, browser profiles, and personal recommendations are not included. Catalog prices, counts, availability, and labels can change.
+Fixtures contain sanitized public catalog markup with synthetic city paths and authentication values. Cookies, account data, browser profiles, and personal recommendations are not included. Catalog prices, counts, availability, and labels can change.
 
 To install from a local checkout, run `go install ./cmd/planeta`. The command lives in `cmd/planeta`, so the installed executable is always named `planeta`, independent of the repository name. To build without installing, run `go build -o planeta ./cmd/planeta`.
 
