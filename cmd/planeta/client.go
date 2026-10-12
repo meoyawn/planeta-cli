@@ -34,7 +34,7 @@ type client struct {
 	saveCookies func([]*http.Cookie) error
 }
 
-// Each client belongs to one invocation: city selection and one data page.
+// Each client belongs to one invocation: optional city selection and one data page.
 // Redirects, automatic pagination, and retries are disabled.
 func newClient(origin, userAgent string, cookies []*http.Cookie) (*client, error) {
 	base, err := url.Parse(origin)
@@ -124,10 +124,27 @@ func (c *client) selectCity(ctx context.Context, city string) error {
 	if !citySlug.MatchString(city) {
 		return fmt.Errorf("invalid city %q: expected a lowercase city URL slug", city)
 	}
+	// Reuse the site's saved city selection only when all region cookies are
+	// present. A matching slug alone cannot establish the numeric city/region
+	// used by the catalog for prices and stock.
+	selected := c.cookieValue("city_code") == city
+	for _, name := range []string{"city_id", "region_id"} {
+		id, err := strconv.ParseUint(c.cookieValue(name), 10, 64)
+		if err != nil || id == 0 {
+			selected = false
+		}
+	}
+	if selected {
+		return nil
+	}
 	u := c.base.ResolveReference(&url.URL{Path: "/" + city + "/"})
 	if _, err := c.get(ctx, u); err != nil {
 		return fmt.Errorf("select city %q: %w", city, err)
 	}
+	return c.verifyCity(city)
+}
+
+func (c *client) verifyCity(city string) error {
 	if got := c.cookieValue("city_code"); got != city {
 		return fmt.Errorf("site selected city %q instead of requested city %q", got, city)
 	}
@@ -149,6 +166,9 @@ func (c *client) Search(ctx context.Context, query, city string, number int) (*s
 	body, err := c.get(ctx, u)
 	if err != nil {
 		return nil, fmt.Errorf("fetch search page %d: %w", number, err)
+	}
+	if err := c.verifyCity(city); err != nil {
+		return nil, err
 	}
 	page, err := parseSearchPage(body, u, city)
 	if err != nil {
@@ -191,6 +211,9 @@ func (c *client) Detail(ctx context.Context, id, city, sourceURL string) (*detai
 	body, err := c.get(ctx, u)
 	if err != nil {
 		return nil, fmt.Errorf("fetch product %s: %w", id, err)
+	}
+	if err := c.verifyCity(city); err != nil {
+		return nil, err
 	}
 	result, err := parseDetailPage(body, u, city, id)
 	if err != nil {

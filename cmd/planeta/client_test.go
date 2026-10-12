@@ -178,6 +178,81 @@ func TestWrongCityAndCancellation(t *testing.T) {
 	}
 }
 
+func TestCityCookiesControlRequestCountAndRejectCityChanges(t *testing.T) {
+	t.Parallel()
+	for _, detail := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, city, cityID, regionID string
+			changedCity                  bool
+			wantRequests                 int32
+		}{
+			{name: "reuse selected city", city: "test-city", cityID: "37", regionID: "16", wantRequests: 1},
+			{name: "different city", city: "other-city", cityID: "38", regionID: "17", wantRequests: 2},
+			{name: "missing city id", city: "test-city", regionID: "16", wantRequests: 2},
+			{name: "invalid region id", city: "test-city", cityID: "37", regionID: "invalid", wantRequests: 2},
+			{name: "city changes in data response", city: "test-city", cityID: "37", regionID: "16", changedCity: true, wantRequests: 1},
+		} {
+			t.Run(fmt.Sprintf("detail=%t/%s", detail, tc.name), func(t *testing.T) {
+				t.Parallel()
+				var requests atomic.Int32
+				c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+					requests.Add(1)
+					if selectMockCity(t, w, r) {
+						return
+					}
+					if got, err := r.Cookie("city_code"); err != nil || got.Value != "test-city" {
+						t.Error("data request did not use the requested city")
+					}
+					if tc.changedCity {
+						http.SetCookie(w, &http.Cookie{Name: "city_code", Value: "other-city", Path: "/"}) // #nosec G124 -- Synthetic city change from the test server.
+					}
+					if detail {
+						if r.URL.Path != "/test-city/catalog/test-15484411/" {
+							t.Errorf("unexpected data request: %s", r.URL)
+						}
+						writeTestResponse(t, w, string(fixture(t, "magnesium-detail")))
+					} else {
+						if r.URL.Path != "/search/" {
+							t.Errorf("unexpected data request: %s", r.URL)
+						}
+						writeTestResponse(t, w, mockPage(1, 123, ""))
+					}
+				})
+				c.http.Jar.SetCookies(c.base, []*http.Cookie{
+					{Name: "city_code", Value: tc.city, Path: "/"},     // #nosec G124 -- Synthetic city preference for the plain HTTP test server.
+					{Name: "city_id", Value: tc.cityID, Path: "/"},     // #nosec G124 -- Synthetic city preference for the plain HTTP test server.
+					{Name: "region_id", Value: tc.regionID, Path: "/"}, // #nosec G124 -- Synthetic region preference for the plain HTTP test server.
+				})
+				var count int
+				var err error
+				if detail {
+					var result *detailResult
+					result, err = c.Detail(t.Context(), "15484411", "test-city", c.base.String()+"/test-city/catalog/test-15484411/")
+					if result != nil {
+						count = result.HTTPRequests
+					}
+				} else {
+					var result *searchResult
+					result, err = c.Search(t.Context(), "магний & B6", "test-city", 1)
+					if result != nil {
+						count = result.HTTPRequests
+					}
+				}
+				if tc.changedCity {
+					if err == nil || !strings.Contains(err.Error(), `"other-city"`) || count != 0 {
+						t.Fatalf("wrong city data returned: count=%d err=%v", count, err)
+					}
+				} else if err != nil || count != int(tc.wantRequests) {
+					t.Fatalf("unexpected result: count=%d err=%v", count, err)
+				}
+				if requests.Load() != tc.wantRequests {
+					t.Fatalf("requests=%d want=%d", requests.Load(), tc.wantRequests)
+				}
+			})
+		}
+	}
+}
+
 func TestInvalidURLsAndInputMakeNoRequests(t *testing.T) {
 	t.Parallel()
 	c := testClient(t, func(http.ResponseWriter, *http.Request) { t.Error("invalid input sent HTTP") })
