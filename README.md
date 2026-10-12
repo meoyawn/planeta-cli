@@ -46,7 +46,7 @@ Replace `<city-slug>` with the city's URL segment from `https://planetazdorovo.r
 
 Preferences are saved in `os.UserConfigDir()/planeta/config.json`, beside `auth.json`: `~/Library/Application Support/planeta/config.json` on macOS, or `$XDG_CONFIG_HOME/planeta/config.json` (normally `~/.config/planeta/config.json`) on Linux. Writes are atomic with an owner-only file. The config contains only the city; timeout, authentication, and pagination remain command options.
 
-Config commands are entirely local: they validate the slug's format without reading browser cookies, making HTTP requests, or maintaining a city lookup cache. The site verifies the selected city when searching or fetching a product. Invalid updates preserve the saved preference, and malformed config files are reported instead of silently ignored.
+Config commands are entirely local: they validate the slug's format without reading browser cookies, making HTTP requests, or maintaining a city lookup cache. Search and ID reuse the site's saved selection when `city_code` matches the requested slug and both numeric `city_id` and `region_id` are present. Otherwise they select the city first. A data response that changes the selected city is rejected. Invalid updates preserve the saved preference, and malformed config files are reported instead of silently ignored.
 
 ## Search
 
@@ -110,13 +110,15 @@ planeta id 23162311 | jq '{name, composition_amounts, active_substances, excipie
 
 **Directions and complete medical instructions appear only with `--full`.** Full output adds every published instruction section, including composition, indications, contraindications, interactions, adverse effects, storage, and directions, plus the site's product schema and visible product text. Available sections vary by product. Paragraphs, lists, and table cell boundaries are preserved; full instruction tables and links are also returned separately.
 
+Both legacy and current v4 product pages are supported. V4 facts include the published manufacturer, active ingredient, minimum age, package, price, and pharmacy counts. Composition and directions are identified by their headings because v4 instruction IDs are positional. Published PDF and instruction-page references appear in `instruction_links` in both default and full output; these links are not fetched. Analogue and recommendation cards cannot supply facts for the requested product. Information absent from the page stays absent.
+
 Daily-cost calculations belong outside the CLI. Choose the intended substance and its explicitly declared amount, verify the serving and package units, then calculate `price_from × target_amount_per_day × serving_quantity / (package_quantity × declared_amount)`. Use the unrounded pack price. The result is a normalized daily cost; whole tablets/capsules may not supply exactly that target. The CLI does not choose a daily dose.
 
 Ingredients and dosage remain available as source text. The CLI does not infer elemental amounts, convert compound mass into an active constituent, classify additives as safe/unsafe, rank medicines, or generate advice. Missing information stays absent, and missing composition is reported in `warnings`. The retailer's schema can describe a supplement as a “Drug”; it is not reliable proof of registration status. Confirm important facts against the actual pack/leaflet.
 
 The site uses slugged product URLs. Search automatically remembers each ID's canonical URL in `os.UserCacheDir()/planeta/products/<city>/`. Product facts are fetched fresh by `id`; this cache stores only the URL mapping. It works across working directories and keeps cities separate. Related package URLs are remembered too.
 
-Some products keep an older ID in their canonical URL while the page uses a different internal catalog SKU. `id` remains the URL ID returned by search; `catalog_id` reports the differing internal SKU when present. The CLI accepts this alias only when the page's canonical link and the product schema both match the requested URL, and the schema SKU matches the visible product's `data-id`. Unverified mismatches still fail. This uses the same two requests and preserves the searchable URL in the cache.
+Some products keep an older ID in their canonical URL while the page uses a different internal catalog SKU. `id` remains the URL ID returned by search; `catalog_id` reports the differing internal SKU when present. The CLI accepts this alias only when the page's canonical link and the product schema both match the requested URL, and the schema SKU matches the visible product's `data-id`. Unverified mismatches still fail. This needs no additional requests and preserves the searchable URL in the cache.
 
 For an ID not previously returned by search, supply its canonical URL:
 
@@ -130,11 +132,11 @@ Replace the abbreviated example with the real product URL. Unknown IDs fail loca
 
 | Command | Successful requests | What is fetched |
 | --- | ---: | --- |
-| `search`, any page or result count | 2 | City page + one search page |
-| `id`, with or without `--full` | 2 | City page + one product page |
+| `search`, any page or result count | 1–2 | One search page; city selection only when needed |
+| `id`, with or without `--full` | 1–2 | One product page; city selection only when needed |
 | `auth import`, `auth status`, `config`, `config set city`, help | 0 | Local state only |
 
-Commands make **at most two** requests. Site-verification challenges and other failures stop immediately; redirects and retries are disabled. Authentication reads remain entirely local and make zero HTTP requests. No command fetches additional products, pages, images, PDFs, or pharmacy-location AJAX data. Pharmacy availability and “from” prices come from the page; individual pharmacy prices are not fetched.
+Commands make **one request when the saved city selection is complete and matches, at most two otherwise**. `http_requests` reports the actual count. Site-verification challenges and other failures stop immediately; redirects and retries are disabled. Authentication reads remain entirely local and make zero HTTP requests. No command fetches additional products, pages, images, PDFs, or pharmacy-location AJAX data. Pharmacy availability and “from” prices come from the page; individual pharmacy prices are not fetched.
 
 Put any iteration outside the CLI. For example, in fish:
 
@@ -145,7 +147,7 @@ for id in (jq -r '.results[].id' search.json)
 end
 ```
 
-With valid clearance, the 15-result example costs 2 search requests plus 15 × 2 product requests. Add `--full` to each product invocation when you need the medical instructions.
+With valid clearance and a matching saved city, the 15-result example costs 1 search request plus 15 product requests. A command that needs city selection costs one additional request. Add `--full` to each product invocation when you need the medical instructions; it does not increase the request count.
 
 Flags can appear before or after positional arguments. A literal `--` ends option parsing. `--timeout` defaults to 90 seconds for the entire command. `--user-agent` can match the importing browser if necessary. Success emits one JSON object to stdout; errors go to stderr and exit nonzero.
 

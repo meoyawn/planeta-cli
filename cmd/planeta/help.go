@@ -24,6 +24,7 @@ Run planeta <command> --help for usage, examples, and options.
 For nested commands, run planeta <command> <subcommand> --help.
 Success prints JSON to stdout; errors go to stderr and exit nonzero.
 Search and id: at most 2 HTTP requests, no retries or automatic pagination.
+Matching saved city selection reduces search and id to 1 HTTP request.
 Auth, config, and help: 0 HTTP requests. No browser automation.
 `
 
@@ -85,6 +86,7 @@ Default output includes full ingredients, active_substances, excipients, dosage,
 composition_amounts and composition_tables, package, package_unit_price,
 price_from, availability, pharmacy_counts, warnings, and related package variants.
 --full adds directions, all published medical instructions, and source schema/text.
+Published instruction_links are included without fetching PDFs or extra pages.
 Amounts preserve declared serving bases; the CLI does not infer elemental amounts
 or choose doses. Missing composition is flagged in warnings; check source label text.
 price_from is a minimum price; pharmacy_counts counts pharmacies, not packs.
@@ -139,7 +141,7 @@ Example:
 		flags.SetOutput(output)
 	}
 	if flags.Name() == "search" || flags.Name() == "id" {
-		fmt.Fprintln(&help, "\nAt most 2 HTTP requests: city page + one data page; no redirects or retries.")
+		fmt.Fprintln(&help, "\n1 HTTP request with matching saved city cookies; otherwise city page + data page (at most 2). No redirects or retries.")
 		fmt.Fprintln(&help, "Authentication failure: run planeta auth import --browser <browser>, then retry.")
 		fmt.Fprintln(&help, "Legacy cookies: --cookie-file or PLANETA_COOKIE_FILE overrides imported cookies.")
 	}

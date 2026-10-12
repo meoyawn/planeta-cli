@@ -53,6 +53,7 @@ type detailResult struct {
 	Age                string              `json:"age,omitempty"`
 	Specifications     []attribute         `json:"specifications"`
 	Instructions       []instruction       `json:"instructions,omitempty"`
+	InstructionLinks   []namedLink         `json:"instruction_links,omitempty"`
 	Images             []string            `json:"images"`
 	Breadcrumbs        []namedLink         `json:"breadcrumbs,omitempty"`
 	Variants           []product           `json:"variants"`
@@ -65,7 +66,7 @@ func parseDetailPage(body []byte, source *url.URL, city, id string) (*detailResu
 	if err != nil {
 		return nil, fmt.Errorf("read HTML: %w", err)
 	}
-	root := doc.Find(".product-detail").First()
+	root := doc.Find(".product-detail, .product-detail-v4").First()
 	if root.Length() == 0 {
 		return nil, fmt.Errorf("product detail missing; site markup may have changed")
 	}
@@ -133,21 +134,33 @@ func parseDetailPage(body []byte, source *url.URL, city, id string) (*detailResu
 	if result.Name == "" {
 		return nil, fmt.Errorf("product name missing")
 	}
-	result.PriceFrom = visiblePrice(root.Find(".product-detail__price").First().Text())
+	// V4 nests analogues and recommendations inside the product root. Keep
+	// product facts scoped to its hero so another card cannot supply a price,
+	// prescription label, expiry, image, or availability for this product.
+	facts := root
+	if hero := root.Find(".product-detail-v4__hero").First(); hero.Length() > 0 {
+		facts = hero
+	}
+	result.PriceFrom = visiblePrice(facts.Find(".product-detail__price, .product-detail-v4__price__current").First().Text())
 	if result.PriceFrom != nil {
 		result.Currency = "RUB"
 	}
-	result.OldPrice = visiblePrice(root.Find(".product-card__price-old").First().Text())
-	result.Labels = selectionTexts(root.Find(".product-detail__label-list .this-label"))
-	result.Expiry = cleanText(root.Find(".this-expiration_text").First().Text())
-	result.Availability = selectionTexts(root.Find(".product-detail__availability p"))
+	result.OldPrice = visiblePrice(facts.Find(".product-card__price-old, .product-detail-v4__price__crossed").First().Text())
+	result.Labels = selectionTexts(facts.Find(".product-detail__label-list .this-label, .product-detail-v4__labels .this-label"))
+	result.Expiry = cleanText(facts.Find(".this-expiration_text").First().Text())
+	result.Availability = selectionTexts(facts.Find(".product-detail__availability p, .product-detail-v4__stock-row--ok, .product-detail-v4__stock-row--order"))
+	result.Delivery = selectionTexts(facts.Find(".product-detail-v4__stock-row--delivery__text"))
 	result.PharmacyCounts = parsePharmacyCounts(result.Availability)
-	result.SourceText = readableText(root.Find(".product-detail__wrap").First())
-	if text := cleanText(root.Find(".this-recipe").First().Text()); text != "" {
+	if root.HasClass("product-detail-v4") {
+		result.SourceText = readableText(facts)
+	} else {
+		result.SourceText = readableText(facts.Find(".product-detail__wrap").First())
+	}
+	if text := cleanText(facts.Find(".this-recipe").First().Text()); text != "" {
 		result.Prescription = text
 	}
-	for _, row := range root.Find(".product-detail__spec tr").EachIter() {
-		cells := row.Find("td")
+	for _, row := range facts.Find(".product-detail__spec tr, .product-detail-v4__feature").EachIter() {
+		cells := row.ChildrenFiltered("td, dt, dd")
 		if cells.Length() < 2 {
 			continue
 		}
@@ -169,14 +182,15 @@ func parseDetailPage(body []byte, source *url.URL, city, id string) (*detailResu
 			result.ActiveIngredient = value
 		case "Количество в упаковке":
 			result.PackageQuantity = value
-		case "Возраст":
+		case "Возраст", "Возраст от":
 			result.Age = value
 		case "Дозировка":
 			result.Dosage = value
 		}
 	}
-	for _, section := range doc.Find(".product-detail-description-content__item[id]").EachIter() {
-		content := section.Find(".product-detail-description-content__item-content").First()
+	result.InstructionLinks = pageLinks(root.Find(".product-detail-v4__instruction-links"), source)
+	for _, section := range doc.Find(".product-detail-description-content__item[id], .product-detail-v4__description[id]").EachIter() {
+		content := section.Find(".product-detail-description-content__item-content, .product-detail-v4__description-text").First()
 		if content.Length() == 0 {
 			continue
 		}
@@ -200,8 +214,10 @@ func parseDetailPage(body []byte, source *url.URL, city, id string) (*detailResu
 			}
 		}
 		result.Instructions = append(result.Instructions, item)
-		switch item.ID {
-		case "instruction_COMPOSITION":
+		// V4 section IDs contain a positional index, not an instruction code.
+		// Its published heading identifies composition and directions.
+		switch {
+		case item.ID == "instruction_COMPOSITION" || item.Title == "Состав и описание" || item.Title == "Состав":
 			result.Ingredients = compositionText(content)
 			result.ActiveSubstances, result.Excipients = ingredientParts(result.Ingredients)
 			result.CompositionTables = item.Tables
@@ -210,9 +226,9 @@ func parseDetailPage(body []byte, source *url.URL, city, id string) (*detailResu
 				composition = result.Ingredients
 			}
 			result.CompositionAmounts = parseCompositionAmounts(composition, item.Tables)
-		case "instruction_DOSAGE":
+		case item.ID == "instruction_DOSAGE" || item.Title == "Дозировка":
 			result.Dosage = item.Text
-		case "instruction_USEMETHODANDDOSES":
+		case item.ID == "instruction_USEMETHODANDDOSES" || item.Title == "Способ применения и дозы":
 			result.Directions = item.Text
 		}
 	}
@@ -226,7 +242,7 @@ func parseDetailPage(body []byte, source *url.URL, city, id string) (*detailResu
 		result.Dosage = declaredServingContents(result.Ingredients)
 	}
 	result.addPackageFacts()
-	for _, img := range root.Find(".product-detail__image img, .product-detail__img, [data-img]").EachIter() {
+	for _, img := range facts.Find(".product-detail__image img, .product-detail__img, .product-detail-v4__img, [data-img]").EachIter() {
 		result.Images = appendURL(result.Images, source, img.AttrOr("data-img", img.AttrOr("data-src", img.AttrOr("src", ""))))
 	}
 	if len(result.Images) > 0 {
