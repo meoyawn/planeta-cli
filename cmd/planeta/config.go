@@ -81,9 +81,30 @@ func applySavedCity(flags *flag.FlagSet, path string) error {
 	return nil
 }
 
+func configHelpRequested(args []string) bool {
+	if len(args) == 1 {
+		return args[0] == "--help" || args[0] == "-h" || args[0] == "help"
+	}
+	if len(args) < 2 || args[0] != "set" {
+		return false
+	}
+	if len(args) == 2 {
+		return args[1] == "--help" || args[1] == "-h" || args[1] == "help"
+	}
+	if args[1] != "city" || len(args) > 4 {
+		return false
+	}
+	for _, arg := range args[2:] {
+		if arg == "--help" || arg == "-h" {
+			return true
+		}
+	}
+	return false
+}
+
 func runConfig(ctx context.Context, args []string, stdout io.Writer, path string) error {
-	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "help") {
-		_, err := io.WriteString(stdout, usage)
+	if configHelpRequested(args) {
+		_, err := io.WriteString(stdout, configUsage)
 		return err
 	}
 	if len(args) != 0 && (len(args) != 3 || args[0] != "set") {
