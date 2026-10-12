@@ -16,22 +16,6 @@ import (
 	"github.com/steipete/sweetcookie"
 )
 
-const usage = `Usage:
-  planeta search [--city CITY] [--page 1] <query>
-  planeta id [--full] [--city CITY] [--url URL] <id>
-  planeta config
-  planeta config set city <slug>
-  planeta auth import --browser <browser> [--browser-profile PROFILE]
-  planeta auth status
-
-Search fetches one page. ID fetches one product; --full includes all instructions.
-City comes from --city or user config; there is no default city.
-Search and id: at most 2 HTTP requests. No retries.
-Auth, config, and help: 0 HTTP requests. No browser automation or automatic pagination.
-If authentication fails, run planeta auth import --browser chrome (or your browser),
-then retry the command. The CLI does not wait for refreshed cookies.
-`
-
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	err := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
@@ -57,6 +41,10 @@ func runWithPaths(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	case "auth":
 		return runAuth(ctx, args[1:], stdout, stderr)
 	case "config":
+		if configHelpRequested(args[1:]) {
+			_, err := io.WriteString(stdout, configUsage)
+			return err
+		}
 		paths, err := locatePaths()
 		if err != nil {
 			return err
@@ -69,6 +57,8 @@ func runWithPaths(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	var usageErr error
+	flags.Usage = func() { usageErr = printCommandUsage(flags) }
 	city := flags.String("city", "", "city URL slug (overrides user config)")
 	cookieFile := flags.String("cookie-file", os.Getenv("PLANETA_COOKIE_FILE"), "optional legacy Cookie header file; normally use auth import")
 	timeout := flags.Duration("timeout", 90*time.Second, "timeout for the entire command")
@@ -82,7 +72,7 @@ func runWithPaths(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	}
 	if err := parseOptions(flags, args[1:], command == "id"); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return nil
+			return usageErr
 		}
 		return err
 	}
@@ -176,21 +166,23 @@ func runWithPaths(ctx context.Context, args []string, stdout, stderr io.Writer, 
 
 func runAuth(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("auth expects import or status; %s", usage)
+		return fmt.Errorf("auth expects import or status; %s", authUsage)
 	}
-	if args[0] == "--help" || args[0] == "-h" {
-		_, err := fmt.Fprint(stdout, usage)
+	if args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
+		_, err := io.WriteString(stdout, authUsage)
 		return err
 	}
 	switch args[0] {
 	case "import":
 		flags := flag.NewFlagSet("auth import", flag.ContinueOnError)
 		flags.SetOutput(stderr)
-		browserName := flags.String("browser", "", "browser to import from, e.g. chrome, brave, edge, firefox, safari")
+		var usageErr error
+		flags.Usage = func() { usageErr = printCommandUsage(flags) }
+		browserName := flags.String("browser", "", "required: chrome, chromium, edge, brave, vivaldi, opera, arc, helium, dia, comet, atlas, whale, firefox, zen, floorp, waterfox, librewolf, safari")
 		profile := flags.String("browser-profile", "", "profile directory or cookie file; Chrome: copy Profile Path from chrome://version")
 		if err := parseOptions(flags, args[1:], false); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
-				return nil
+				return usageErr
 			}
 			return err
 		}
@@ -211,7 +203,17 @@ func runAuth(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		}
 		return writeJSON(stdout, result)
 	case "status":
-		if len(args) != 1 {
+		flags := flag.NewFlagSet("auth status", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		var usageErr error
+		flags.Usage = func() { usageErr = printCommandUsage(flags) }
+		if err := parseOptions(flags, args[1:], false); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return usageErr
+			}
+			return err
+		}
+		if flags.NArg() != 0 {
 			return fmt.Errorf("auth status accepts no arguments")
 		}
 		paths, err := defaultPaths()
